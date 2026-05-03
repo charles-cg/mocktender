@@ -1,5 +1,5 @@
-#ifndef HM10_h
-#define HM10_h
+#ifndef USART_h
+#define USART_h
 
 void USART_init(unsigned int ubrr);
 void USART_send_char(char ch);
