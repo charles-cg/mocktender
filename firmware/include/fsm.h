@@ -13,7 +13,7 @@ typedef struct {
 } FSM;
 
 //initial fsm state
-FSM fsm = {IDLE, IDLE, 0x00, 0x00}; 
+extern FSM fsm;
 
 void transition(FSM *fsm, State newState);
 
