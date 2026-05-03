@@ -1,0 +1,14 @@
+[
+    {
+        "command": "/Users/carli/.platformio/packages/toolchain-atmelavr/bin/avr-gcc -o .pio/build/ATmega16/src/HX711.o -c -std=gnu11 -fno-fat-lto-objects -mmcu=atmega16 -Os -Wall -ffunction-sections -fdata-sections -flto -DF_CPU=8000000L -DPLATFORMIO=60119 -DARDUINO_AVR_ATmega16 -Iinclude -Isrc src/HX711.c",
+        "directory": "/Users/carli/college/mocktender/firmware",
+        "file": "src/HX711.c",
+        "output": ".pio/build/ATmega16/src/HX711.o"
+    },
+    {
+        "command": "/Users/carli/.platformio/packages/toolchain-atmelavr/bin/avr-gcc -o .pio/build/ATmega16/src/main.o -c -std=gnu11 -fno-fat-lto-objects -mmcu=atmega16 -Os -Wall -ffunction-sections -fdata-sections -flto -DF_CPU=8000000L -DPLATFORMIO=60119 -DARDUINO_AVR_ATmega16 -Iinclude -Isrc src/main.c",
+        "directory": "/Users/carli/college/mocktender/firmware",
+        "file": "src/main.c",
+        "output": ".pio/build/ATmega16/src/main.o"
+    }
+]

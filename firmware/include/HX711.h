@@ -5,15 +5,15 @@
 
 #ifndef PIN_DOUT
 //   #define PORT_DOUT PORTC
-  #define READ_PORT_DOUT PINC
-  #define DDR_DOUT DDRC
-  #define PIN_DOUT PORTC3
+  #define READ_PORT_DOUT PINB
+  #define DDR_DOUT DDRB
+  #define PIN_DOUT PORTB1
 #endif
 
 #ifndef PIN_CLK
-  #define PORT_CLK PORTC
-  #define DDR_CLK DDRC
-  #define PIN_CLK PORTC2
+  #define PORT_CLK PORTB
+  #define DDR_CLK DDRB
+  #define PIN_CLK PORTB0
 #endif
 
 #include <stdint.h>
