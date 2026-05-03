@@ -1,18 +1,13 @@
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
-
-#define BAUD 9600 //Set Baud Rate
-#define MYUBRR F_CPU/16/BAUD-1 //UBRR formula
+#include "config.h"
+#include "fsm.h"
 
 int main (void) {
-    enum {
-        IDLE, CUP_PLACED, DISPENSE, MIXING, DELIVER, ERROR
-    } state; //FSM states
 
-    state = IDLE; //Initial state is IDLE
     while (1) {
-        switch (state) {
+        switch (fsm.state) {
             case IDLE: {
                 break;
             }
@@ -22,10 +17,13 @@ int main (void) {
             case DISPENSE: {
                 break;
             }
-            case MIXING: {
+            case DELIVER: {
                 break;
             }
-            case DELIVER: {
+            case MAINTENANCE: {
+                break;
+            }
+            case CLEANING: {
                 break;
             }
             case ERROR: {
