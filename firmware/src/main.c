@@ -12,9 +12,11 @@ int main (void) {
     HX711_init(128);
     sei();
 
+    FSM fsm = {IDLE, IDLE, 0, 0, 0};
     while (1) {
         switch (fsm.state) {
             case IDLE: {
+                handleIdle(fsm);
                 break;
             }
             case CUP_PLACED: {

@@ -1,5 +1,6 @@
 #ifndef FSM_h
 #define FSM_h
+#include <stdint.h>
 
 typedef enum {
     IDLE, CUP_PLACED, DISPENSE, DELIVER, MAINTENANCE, CLEANING, ERROR
@@ -8,12 +9,10 @@ typedef enum {
 typedef struct {
     State state;
     State prevState;
-    char cupClass;
-    char errorCode;
+    uint8_t cupClass;
+    uint8_t errorCode;
+    uint8_t recipeId;
 } FSM;
-
-//initial fsm state
-extern FSM fsm;
 
 void transition(FSM *fsm, State newState);
 

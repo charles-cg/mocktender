@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-void adc_init(void);
-uint16_t adc_read(uint8_t channel);
+void adcInit(void);
+uint16_t adcRead(uint8_t channel);
 
 #endif // ADC_H

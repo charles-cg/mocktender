@@ -3,9 +3,10 @@
 
 #include <avr/interrupt.h>
 #include <avr/io.h>
+#include <stdint.h>
 
-volatile char dataReady = 0;
-volatile char packet = 0;
+extern volatile uint8_t packet;
+extern volatile uint8_t dataReady;
 
 ISR(USART_RXC_vect);
 

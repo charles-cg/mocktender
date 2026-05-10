@@ -6,3 +6,6 @@
 #define SMALL_CUP 100
 #define MED_CUP 300
 #define BIG_CUP 500
+
+//LDR Light Threshold
+#define LIGHT_THRESHOLD 300

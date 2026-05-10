@@ -1,11 +1,15 @@
 #ifndef STATES_h
 #define STATES_h
 
+#include "fsm.h"
+#include <stdint.h>
+
 //State handlers
-void handleIdle(void);
-void handleCupPlaced(void);
+void handleIdle(FSM nFsm);
+void handleCupPlaced(FSM nFsm);
 
 //Helper functions
-void checkLid(void);
-char classifyCup(double weight);
+void checkLid(FSM nFsm);
+uint8_t classifyCup(double weight);
+
 #endif // !DEBUG
