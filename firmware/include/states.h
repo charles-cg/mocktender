@@ -5,11 +5,11 @@
 #include <stdint.h>
 
 //State handlers
-void handleIdle(FSM nFsm);
-void handleCupPlaced(FSM nFsm);
+void handleIdle(FSM *nFsm);
+void handleCupPlaced(FSM *nFsm);
 
 //Helper functions
-void checkLid(FSM nFsm);
+void checkLid(FSM *nFsm);
 uint8_t classifyCup(double weight);
 
 #endif // !DEBUG

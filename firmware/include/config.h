@@ -8,4 +8,4 @@
 #define BIG_CUP 500
 
 //LDR Light Threshold
-#define LIGHT_THRESHOLD 300
+#define LIGHT_THRESHOLD 1024

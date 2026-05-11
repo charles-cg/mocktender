@@ -9,7 +9,7 @@ typedef enum {
 typedef struct {
     State state;
     State prevState;
-    uint8_t cupClass;
+    char cupClass;
     uint8_t errorCode;
     uint8_t recipeId;
 } FSM;
