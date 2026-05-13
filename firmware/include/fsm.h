@@ -11,7 +11,7 @@ typedef struct {
     State prevState;
     char cupClass;
     uint8_t errorCode;
-    uint8_t recipeId;
+    char recipeId;
 } FSM;
 
 void transition(FSM *fsm, State newState);

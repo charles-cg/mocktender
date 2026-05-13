@@ -4,7 +4,8 @@
 
 const Recipe recipes[NUM_RECIPES] PROGMEM = {
     { "Sunrise",         {55,  0,  0, 10, 35,  0} },
-    { "Tropical Breeze", { 0, 50, 35, 15,  0,  0} }, { "Mocktail Mule",   { 0,  0, 50, 15,  0, 35} },
+    { "Tropical Breeze", { 0, 50, 35, 15,  0,  0} }, 
+    { "Mocktail Mule",   { 0,  0, 50, 15,  0, 35} },
     { "Tropical Sunset", {40, 40,  0,  0, 20,  0} },
     { "Ginger Tropic",   { 0, 55,  0, 15,  0, 30} },
     { "Paradise Punch",  {30, 30, 25, 15,  0,  0} },

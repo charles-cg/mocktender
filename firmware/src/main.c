@@ -11,6 +11,7 @@
 int main (void) {
     USART_init(MYUBRR);
     HX711_init(128);
+    HX711_tare(10);   // zero the scale with nothing on it
     adcInit();
     sei();
 

@@ -3,6 +3,7 @@
 #include <avr/interrupt.h>
 #include <avr/cpufunc.h>
 #include <util/delay.h>
+#include <stdint.h>
 
 // static uint8_t PD_SCK;    // Power Down and Serial Clock Input Pin
 // static uint8_t DOUT;// Serial Data Output Pin
@@ -50,10 +51,13 @@ void HX711_set_gain(uint8_t gain) {
 
 
 
+#define HX711_TIMEOUT 100000UL
+
 long HX711_read() {
-    // wait for the chip to become ready
+    uint32_t timeout = HX711_TIMEOUT;
     while (!HX711_is_ready()) {
         _NOP();
+        if (--timeout == 0) return 0L;  // DOUT stuck HIGH — hardware not connected/ready
     }
 
     unsigned long value = 0;
@@ -89,7 +93,7 @@ long HX711_read() {
             | (unsigned long)(data[1]) << 8
             | (unsigned long)(data[0]) );
 
-    return (long)(value);
+    return -(long)(value);
 }
 
 long HX711_read_average(uint8_t times) {

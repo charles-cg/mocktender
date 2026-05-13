@@ -5,10 +5,12 @@
 #include <avr/io.h>
 #include <stdint.h>
 
-extern volatile uint8_t packet;
+extern volatile char packet;
 extern volatile uint8_t dataReady;
+extern volatile uint8_t pump;
 
 ISR(USART_RXC_vect);
+ISR(TIMER1_COMPA_vect);
 
 #endif // !INTERRUPTS_h
 
