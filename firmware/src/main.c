@@ -13,6 +13,7 @@ int main (void) {
     HX711_init(128);
     HX711_tare(10);   // zero the scale with nothing on it
     adcInit();
+    DDRC = 0xFF;
     sei();
 
     FSM fsm = {IDLE, IDLE, 0, 0, 0};

@@ -13,7 +13,7 @@
 void handleIdle(FSM *nFsm) {
     USART_send_string("IDLE");
     _delay_ms(1000);
-    checkLid(nFsm); //check if Lid is open, if it is change to MAINTENANCE
+checkLid(nFsm); //check if Lid is open, if it is change to MAINTENANCE
     double weight = HX711_get_mean_value(1);
     sendScaleReading(weight);
     _delay_ms(1000);
@@ -35,10 +35,6 @@ void handleCupPlaced(FSM *nFsm) {
 
     nFsm->cupClass = classifyCup(weight);
 
-    //debug
-    USART_send_char(nFsm->cupClass);
-    _delay_ms(1000);
-    USART_send_char(packet);
 
     if (dataReady) {
         dataReady = 0;
@@ -73,6 +69,26 @@ void handleCupPlaced(FSM *nFsm) {
                 transition(nFsm, DISPENSE);
                 break;
             }
+            case '7': {
+                nFsm->recipeId = 6;
+                transition(nFsm, DISPENSE);
+                break;
+            }
+            case '8': {
+                nFsm->recipeId = 7;
+                transition(nFsm, DISPENSE);
+                break;
+            }
+            case '9': {
+                nFsm->recipeId = 8;
+                transition(nFsm, DISPENSE);
+                break;
+            }
+            case 'A': {
+                nFsm->recipeId = 9;
+                transition(nFsm, DISPENSE);
+                break;
+            }
             default:
                 break;
         }
@@ -80,7 +96,45 @@ void handleCupPlaced(FSM *nFsm) {
 }
 
 void handleDispense(FSM* nFsm) {
+    //pump 1
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
+    //pump 2
+    globalPump += 1;
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
+    //pump 3
+    globalPump += 1;
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
+    //pump 4
+    globalPump += 1;
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
+    
+    //pump 5
+    globalPump += 1;
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
 
+    //pump 6
+    globalPump += 1;
+    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+        PORTC |= (1 << globalPump);
+        dynamicDelay(nFsm, globalPump);
+    }
+
+    globalPump = 0;
 }
 
 char classifyCup(double weight) {
@@ -95,9 +149,15 @@ char classifyCup(double weight) {
     }
 }
 
+void dynamicDelay (FSM* nFsm, uint8_t pump) {
+    uint8_t volume = calculateMl(nFsm, pump);
+    uint16_t time = calculateTime(volume);
+    uint16_t ocr = calculateOCR1(time);
+    dynamicTimer(ocr);
+}
+
 void dynamicTimer(uint16_t ocr) {
-    OCR1AH = (ocr >> 8);
-    OCR1AL = ocr;
+    OCR1A = ocr;
 
     TCCR1B = (1 << WGM12) | (1 << CS12) | (1 << CS10);
     TIMSK = (1 << OCIE1A);

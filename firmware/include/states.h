@@ -18,5 +18,6 @@ uint16_t getCupSize(FSM* nFsm);
 uint16_t calculateTime(uint8_t volume);
 uint16_t calculateOCR1(uint16_t time);
 void dynamicTimer(uint16_t ocr);
+void dynamicDelay (FSM* nFsm, uint8_t pump);
 
 #endif // !DEBUG
