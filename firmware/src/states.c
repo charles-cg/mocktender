@@ -96,45 +96,18 @@ void handleCupPlaced(FSM *nFsm) {
 }
 
 void handleDispense(FSM* nFsm) {
-    //pump 1
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
-    }
-    //pump 2
-    globalPump += 1;
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
-    }
-    //pump 3
-    globalPump += 1;
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
-    }
-    //pump 4
-    globalPump += 1;
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
-    }
-    
-    //pump 5
-    globalPump += 1;
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
-    }
-
-    //pump 6
-    globalPump += 1;
-    if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-        PORTC |= (1 << globalPump);
-        dynamicDelay(nFsm, globalPump);
+    for (globalPump = 0; globalPump < 6; globalPump++) {
+        if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+            PORTC |= (1 << globalPump);
+            pumpBusy = 1;
+            TCNT1 = 0;
+            dynamicDelay(nFsm, globalPump);
+            while (pumpBusy);
+        }
     }
 
     globalPump = 0;
+    transition(nFsm, DELIVER);
 }
 
 char classifyCup(double weight) {

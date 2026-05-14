@@ -28,8 +28,7 @@ int main (void) {
                 break;
             }
             case DISPENSE: {
-                USART_send_string("DISPENSE");
-                _delay_ms(1500);
+                handleDispense(&fsm);
                 break;
             }
             case DELIVER: {

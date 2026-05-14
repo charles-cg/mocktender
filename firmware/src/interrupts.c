@@ -4,6 +4,7 @@
 volatile char packet = 0;
 volatile uint8_t dataReady = 0;
 volatile uint8_t globalPump = 0;
+volatile uint8_t pumpBusy = 0;
 
 ISR(USART_RXC_vect) {
     char rx = UDR;
@@ -15,5 +16,6 @@ ISR(USART_RXC_vect) {
 
 ISR(TIMER1_COMPA_vect) {
     TCCR1B = 0x00;
-    PORTC |= (1 << globalPump);
+    PORTC &= ~(1 << globalPump);
+    pumpBusy = 0;
 }

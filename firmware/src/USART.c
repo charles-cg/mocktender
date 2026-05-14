@@ -12,7 +12,7 @@ void USART_init (unsigned int ubrr) {
 }
 
 void USART_send_char(char ch) {
-    while (! (UCSRA & (1<<UDRE)));  /* Wait for empty transmit buffer */
+    while (! (UCSRA & (1<<UDRE)));  //Wait for empty transmit buffer
 	UDR = ch ;
 }
 

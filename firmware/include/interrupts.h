@@ -8,6 +8,7 @@
 extern volatile char packet;
 extern volatile uint8_t dataReady;
 extern volatile uint8_t globalPump;
+extern volatile uint8_t pumpBusy;
 
 ISR(USART_RXC_vect);
 ISR(TIMER1_COMPA_vect);
