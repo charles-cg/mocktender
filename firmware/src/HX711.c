@@ -9,7 +9,7 @@
 // static uint8_t DOUT;// Serial Data Output Pin
 static uint8_t GAIN;// amplification factor
 static long OFFSET = 0;    // used for tare weight
-static float SCALE = 1;    // used to return weight in grams, kg, ounces, whatever
+static float SCALE = 715;    // used to return weight in grams, kg, ounces, whatever
 
 #define clock_high() (PORT_CLK |=  (1 << PIN_CLK))
 #define clock_low()  (PORT_CLK &= ~(1 << PIN_CLK))

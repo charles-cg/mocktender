@@ -7,6 +7,9 @@
 #define MED_CUP 300
 #define BIG_CUP 500
 
+// Idle deadband (grams, integer): |reading| < SCALE_DEADBAND is reported as 0.
+#define SCALE_DEADBAND 1
+
 //LDR Light Threshold
 #define LIGHT_THRESHOLD 1024
 #define FLOWRATE_X100 2667UL  // 26.67 mL/s * 100, avoids float

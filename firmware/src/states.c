@@ -10,23 +10,17 @@
 #include <util/delay.h>
 #include "ADC.h"
 
-void handleIdle(FSM *nFsm) {
-    USART_send_string("IDLE");
-    _delay_ms(1000);
-checkLid(nFsm); //check if Lid is open, if it is change to MAINTENANCE
-    double weight = HX711_get_mean_value(1);
-    sendScaleReading(weight);
-    _delay_ms(1000);
+void handleIdle(FSM* nFsm) {
+    double weight = HX711_get_mean_units(10);
+    if (weight < SCALE_DEADBAND && weight > -SCALE_DEADBAND) weight = 0;
     if (weight > CUP_PRESENT) {
+        dataReady = 0;
         transition(nFsm, CUP_PLACED);
     }
 }
 
-void handleCupPlaced(FSM *nFsm) {
-    checkLid(nFsm); //check if Lid is open
-
-    double weight = HX711_get_mean_value(1);
-    sendScaleReading(weight);
+void handleCupPlaced(FSM* nFsm) {
+    double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
         nFsm->cupClass = 0x00;
@@ -170,7 +164,7 @@ uint16_t getCupSize(FSM* nFsm) {
     }
 }
 
-void checkLid(FSM *nFsm) {
+void checkLid(FSM* nFsm) {
     uint16_t ldr = adcRead(0);
     if (ldr > LIGHT_THRESHOLD) {
         transition(nFsm, MAINTENANCE);
