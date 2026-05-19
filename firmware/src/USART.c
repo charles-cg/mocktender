@@ -1,5 +1,4 @@
 #include "USART.h"
-#include <avr/common.h>
 #include <avr/io.h>
 #include <stdlib.h>
 #include <string.h>

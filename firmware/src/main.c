@@ -1,33 +1,39 @@
 #include <avr/io.h>
 #include <util/delay.h>
-#include <avr/interrupt.h>
 #include "USART.h"
 #include "HX711.h"
 #include "config.h"
 #include "fsm.h"
 #include "states.h"
 #include "ADC.h"
+#include "interrupts.h"
 
 int main (void) {
+    // set pull-up for external interrupts
+    PORTB |= (1 << PB2);
+    PORTD = (1 << PD2) | (1 << PD3);
+
+    // INITS
+    detectModeInit();
+    debounceInit();
+    adcInit();
     USART_init(MYUBRR);
     HX711_init(128);
-
-    // Let the HX711 + load cell thermally settle before taring,
-    // otherwise warm-up drift makes the captured zero unstable.
-    _delay_ms(30000);
-    (void)HX711_read_average(10);   // discard first batch
-    HX711_tare(20);
-    HX711_set_scale(715);
-
-    adcInit();
+    // PORTC as output
     DDRC = 0xFF;
-    sei();
-    USART_send_string("Machine is ready");
+    FSM fsm = {CALIBRATE, CALIBRATE, 0, 0, 0};
 
-    FSM fsm = {IDLE, IDLE, 0, 0, 0};
+    sei();
     while (1) {
         switch (fsm.state) {
+            case CALIBRATE: {
+                USART_send_string("CALIBRATE");
+                handleCalibrate(&fsm);
+                break;
+            }
             case IDLE: {
+                USART_send_string("IDLE");
+                _delay_ms(1000);
                 handleIdle(&fsm);
                 break;
             }
@@ -40,13 +46,18 @@ int main (void) {
                 break;
             }
             case DELIVER: {
+                handleDeliver(&fsm);
                 break;
             }
             case MAINTENANCE: {
                 USART_send_string("MAINTENANCE");
+                _delay_ms(1000);
                 break;
             }
             case CLEANING: {
+                break;
+            }
+            case REFILL: {
                 break;
             }
             case ERROR: {

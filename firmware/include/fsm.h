@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 typedef enum {
-    IDLE, CUP_PLACED, DISPENSE, DELIVER, MAINTENANCE, CLEANING, ERROR
+    CALIBRATE, IDLE, CUP_PLACED, DISPENSE, DELIVER, MAINTENANCE, CLEANING, REFILL, ERROR
 } State; //FSM states
 
 typedef struct {

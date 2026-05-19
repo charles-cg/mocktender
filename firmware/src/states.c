@@ -1,34 +1,77 @@
 #include "states.h"
-#include "USART.h"
 #include "flash.h"
-#include "fsm.h"
 #include "interrupts.h"
 #include "HX711.h"
 #include "config.h"
-#include <avr/io.h>
-#include <stdint.h>
-#include <util/delay.h>
-#include "ADC.h"
+#include "USART.h"
+#include "timers.h"
+#include <string.h>
+
+void handleCalibrate(FSM* nFsm) {
+    // activate just INT2 (rst)
+    GICR |= (1 << INT2);
+    delayCheck = 0;
+    delay30sDone = 0;
+    delay5s();
+    // Let the HX711 + load cell thermally settle before taring,
+    // otherwise warm-up drift makes the captured zero unstable.
+    while (!delay30sDone) {
+        if (rstPressed) {
+            rstPressed = 0;
+            transition(nFsm, CALIBRATE);
+            return;
+        }
+    }
+    (void)HX711_read_average(10);   // discard first batch
+    HX711_tare(20);
+    HX711_set_scale(715);
+
+    USART_send_string("Machine is ready");
+    transition(nFsm, IDLE);
+    return;
+}
 
 void handleIdle(FSM* nFsm) {
+    GICR |= (1 << INT0);
+    if (rstPressed) {
+        rstAction(nFsm);
+        transition(nFsm, IDLE);
+        return;
+    } else if (maintPressed) {
+        maintPressed = 0;
+        transition(nFsm, MAINTENANCE);
+        return;
+    }
+
     double weight = HX711_get_mean_units(10);
     if (weight < SCALE_DEADBAND && weight > -SCALE_DEADBAND) weight = 0;
     if (weight > CUP_PRESENT) {
         dataReady = 0;
         transition(nFsm, CUP_PLACED);
+        return;
     }
 }
 
 void handleCupPlaced(FSM* nFsm) {
+    if (rstPressed) {
+        rstAction(nFsm);
+        transition(nFsm, IDLE);
+        return;
+    } else if (maintPressed) {
+        maintPressed = 0;
+        transition(nFsm, MAINTENANCE);
+        return;
+    }
+
     double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
         nFsm->cupClass = 0x00;
         transition(nFsm, IDLE);
+        return;
     }
 
     nFsm->cupClass = classifyCup(weight);
-
 
     if (dataReady) {
         dataReady = 0;
@@ -87,21 +130,78 @@ void handleCupPlaced(FSM* nFsm) {
                 break;
         }
     }
+    return;
 }
 
 void handleDispense(FSM* nFsm) {
+    GICR &= ~(1 << INT0);
     for (globalPump = 0; globalPump < 6; globalPump++) {
         if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
             PORTC |= (1 << globalPump);
             pumpBusy = 1;
             TCNT1 = 0;
             dynamicDelay(nFsm, globalPump);
-            while (pumpBusy);
+            while (pumpBusy) {
+                if (rstPressed) {
+                    rstAction(nFsm);
+                    TCCR1B = 0x00;
+                    TCNT1 = 0;
+                    PORTC &= ~(1 << globalPump);
+                    pumpBusy = 0;
+                    globalPump = 0;
+                    transition(nFsm, IDLE);
+                    return;
+                }
+                double weight = HX711_get_mean_units(10);
+                if (weight < CUP_PRESENT) {
+                    PORTC &= ~(1 << globalPump);
+                    pumpBusy = 0;
+                    globalPump = 0;
+                    nFsm->errorCode = 0x01;
+                    transition(nFsm, ERROR);
+                    return;
+                }
+            }
         }
     }
 
     globalPump = 0;
     transition(nFsm, DELIVER);
+    return;
+}
+
+void handleDeliver(FSM* nFsm) {
+    double weight = HX711_get_mean_units(10);
+
+    if (weight < CUP_PRESENT) {
+        nFsm->cupClass = 0x00;
+        nFsm->recipeId = 0;
+        transition(nFsm, IDLE);
+        return;
+    }
+}
+
+void handleError(FSM* nFsm) {
+    char tmp[1] = {(char)nFsm->errorCode};
+
+    // a temporal send until packets are figured out
+    USART_send_string(strcat("E:", tmp));
+
+    while (!rstPressed);
+
+    rstAction(nFsm);
+    return;
+}
+
+void handleMaintenance(FSM* nFsm) {
+
+}
+
+void rstAction(FSM* nFsm) {
+    rstPressed = 0;
+    nFsm->cupClass = 0;
+    nFsm->recipeId = 0;
+    nFsm->errorCode = 0;
 }
 
 char classifyCup(double weight) {
@@ -121,13 +221,6 @@ void dynamicDelay (FSM* nFsm, uint8_t pump) {
     uint16_t time = calculateTime(volume);
     uint16_t ocr = calculateOCR1(time);
     dynamicTimer(ocr);
-}
-
-void dynamicTimer(uint16_t ocr) {
-    OCR1A = ocr;
-
-    TCCR1B = (1 << WGM12) | (1 << CS12) | (1 << CS10);
-    TIMSK = (1 << OCIE1A);
 }
 
 // Returns OCR1 value for a given duration in milliseconds.
@@ -164,9 +257,3 @@ uint16_t getCupSize(FSM* nFsm) {
     }
 }
 
-void checkLid(FSM* nFsm) {
-    uint16_t ldr = adcRead(0);
-    if (ldr > LIGHT_THRESHOLD) {
-        transition(nFsm, MAINTENANCE);
-    }
-}
