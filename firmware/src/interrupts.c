@@ -22,6 +22,7 @@ ISR(USART_RXC_vect) {
 
 ISR(TIMER1_COMPA_vect) {
     TCCR1B = 0x00;
+    TIMSK &= ~(1 << OCIE1A);
     PORTC &= ~(1 << globalPump);
     pumpBusy = 0;
 }
@@ -41,7 +42,7 @@ ISR(TIMER2_COMP_vect) {
     TIMSK &= ~(1 << OCIE2);
 
     if (!(PIND & (1 << PD2))) {
-        maintPressed = 1;
+        maintPressed += 1;
     } else if (!(PIND & (1 << PD3))) {
         startPressed = 1;
     } else if (!(PINB & (1 << PB2))) {

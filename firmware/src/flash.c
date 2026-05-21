@@ -18,3 +18,10 @@ const Recipe recipes[NUM_RECIPES] PROGMEM = {
 uint8_t getRecipeRatio(uint8_t recipe, uint8_t pump) {
     return pgm_read_byte(&recipes[recipe].ratio[pump]);
 }
+
+void getRecipeName(uint8_t recipe, char *buf) {
+    for (uint8_t i = 0; i < 22; i++) {
+        buf[i] = pgm_read_byte(&recipes[recipe].name[i]);
+        if (buf[i] == '\0') return;
+    }
+}

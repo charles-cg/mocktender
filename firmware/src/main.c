@@ -27,12 +27,10 @@ int main (void) {
     while (1) {
         switch (fsm.state) {
             case CALIBRATE: {
-                USART_send_string("CALIBRATE");
                 handleCalibrate(&fsm);
                 break;
             }
             case IDLE: {
-                USART_send_string("IDLE");
                 _delay_ms(1000);
                 handleIdle(&fsm);
                 break;
@@ -50,8 +48,7 @@ int main (void) {
                 break;
             }
             case MAINTENANCE: {
-                USART_send_string("MAINTENANCE");
-                _delay_ms(1000);
+                handleMaintenance(&fsm);
                 break;
             }
             case CLEANING: {
@@ -61,6 +58,7 @@ int main (void) {
                 break;
             }
             case ERROR: {
+                handleError(&fsm);
                 break;
             }
         }

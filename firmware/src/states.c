@@ -1,32 +1,36 @@
 #include "states.h"
 #include "flash.h"
+#include "fsm.h"
 #include "interrupts.h"
 #include "HX711.h"
 #include "config.h"
 #include "USART.h"
 #include "timers.h"
-#include <string.h>
+#include <stdlib.h>
 
 void handleCalibrate(FSM* nFsm) {
     // activate just INT2 (rst)
     GICR |= (1 << INT2);
     delayCheck = 0;
     delay30sDone = 0;
+    USART_send_string("Calibrating: warming up (30s)...\r\n");
     delay5s();
     // Let the HX711 + load cell thermally settle before taring,
     // otherwise warm-up drift makes the captured zero unstable.
     while (!delay30sDone) {
         if (rstPressed) {
             rstPressed = 0;
+            USART_send_string("Calibration reset\r\n");
             transition(nFsm, CALIBRATE);
             return;
         }
     }
+    USART_send_string("Taring...\r\n");
     (void)HX711_read_average(10);   // discard first batch
     HX711_tare(20);
     HX711_set_scale(715);
 
-    USART_send_string("Machine is ready");
+    USART_send_string("Machine is ready\r\n");
     transition(nFsm, IDLE);
     return;
 }
@@ -46,6 +50,8 @@ void handleIdle(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
     if (weight < SCALE_DEADBAND && weight > -SCALE_DEADBAND) weight = 0;
     if (weight > CUP_PRESENT) {
+        USART_send_string("Cup placed: ");
+        sendScaleReading(weight);
         dataReady = 0;
         transition(nFsm, CUP_PLACED);
         return;
@@ -66,6 +72,7 @@ void handleCupPlaced(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
+        USART_send_string("Cup removed\r\n");
         nFsm->cupClass = 0x00;
         transition(nFsm, IDLE);
         return;
@@ -75,74 +82,57 @@ void handleCupPlaced(FSM* nFsm) {
 
     if (dataReady) {
         dataReady = 0;
+        uint8_t valid = 1;
         switch (packet) {
-            case '1': {
-                nFsm->recipeId = 0;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '2': {
-                nFsm->recipeId = 1;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '3': {
-                nFsm->recipeId = 2;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '4': {
-                nFsm->recipeId = 3;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '5': {
-                nFsm->recipeId = 4;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '6': {
-                nFsm->recipeId = 5;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '7': {
-                nFsm->recipeId = 6;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '8': {
-                nFsm->recipeId = 7;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case '9': {
-                nFsm->recipeId = 8;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            case 'A': {
-                nFsm->recipeId = 9;
-                transition(nFsm, DISPENSE);
-                break;
-            }
-            default:
-                break;
+            case '1': nFsm->recipeId = 0; break;
+            case '2': nFsm->recipeId = 1; break;
+            case '3': nFsm->recipeId = 2; break;
+            case '4': nFsm->recipeId = 3; break;
+            case '5': nFsm->recipeId = 4; break;
+            case '6': nFsm->recipeId = 5; break;
+            case '7': nFsm->recipeId = 6; break;
+            case '8': nFsm->recipeId = 7; break;
+            case '9': nFsm->recipeId = 8; break;
+            case 'A': nFsm->recipeId = 9; break;
+            default:  valid = 0;          break;
+        }
+        if (valid) {
+            char name[22];
+            getRecipeName(nFsm->recipeId, name);
+            USART_send_string("Recipe: ");
+            USART_send_string(name);
+            USART_send_string(" | Cup class: ");
+            USART_send_char(nFsm->cupClass);
+            USART_send_string("\r\n");
+            transition(nFsm, DISPENSE);
         }
     }
     return;
 }
 
 void handleDispense(FSM* nFsm) {
+    char name[22];
+    getRecipeName(nFsm->recipeId, name);
+    USART_send_string("Dispensing: ");
+    USART_send_string(name);
+    USART_send_string("\r\n");
+
     GICR &= ~(1 << INT0);
     for (globalPump = 0; globalPump < 6; globalPump++) {
         if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
+            uint8_t vol = calculateMl(nFsm, globalPump);
+            USART_send_string("Pump ");
+            USART_send_uint8(globalPump + 1);
+            USART_send_string(": ");
+            USART_send_uint8(vol);
+            USART_send_string(" mL\r\n");
             PORTC |= (1 << globalPump);
             pumpBusy = 1;
             TCNT1 = 0;
             dynamicDelay(nFsm, globalPump);
             while (pumpBusy) {
                 if (rstPressed) {
+                    USART_send_string("Dispense aborted\r\n");
                     rstAction(nFsm);
                     TCCR1B = 0x00;
                     TCNT1 = 0;
@@ -154,6 +144,7 @@ void handleDispense(FSM* nFsm) {
                 }
                 double weight = HX711_get_mean_units(10);
                 if (weight < CUP_PRESENT) {
+                    USART_send_string("Error: cup removed during dispense\r\n");
                     PORTC &= ~(1 << globalPump);
                     pumpBusy = 0;
                     globalPump = 0;
@@ -162,9 +153,13 @@ void handleDispense(FSM* nFsm) {
                     return;
                 }
             }
+            USART_send_string("Pump ");
+            USART_send_uint8(globalPump + 1);
+            USART_send_string(" done\r\n");
         }
     }
 
+    USART_send_string("Dispense complete\r\n");
     globalPump = 0;
     transition(nFsm, DELIVER);
     return;
@@ -174,6 +169,7 @@ void handleDeliver(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
+        USART_send_string("Order complete\r\n");
         nFsm->cupClass = 0x00;
         nFsm->recipeId = 0;
         transition(nFsm, IDLE);
@@ -182,19 +178,37 @@ void handleDeliver(FSM* nFsm) {
 }
 
 void handleError(FSM* nFsm) {
-    char tmp[1] = {(char)nFsm->errorCode};
-
-    // a temporal send until packets are figured out
-    USART_send_string(strcat("E:", tmp));
+    char buf[4];
+    USART_send_string("Error: 0x");
+    itoa(nFsm->errorCode, buf, 16);
+    USART_send_string(buf);
+    USART_send_string(" - press RST to continue\r\n");
 
     while (!rstPressed);
 
     rstAction(nFsm);
+    transition(nFsm, IDLE);
     return;
 }
 
 void handleMaintenance(FSM* nFsm) {
+    GICR |= (1 << INT1); // activate start interrupt
 
+    if (maintPressed == 2) {
+        maintPressed = 0;
+    }
+
+    if (startPressed) {
+        if (maintPressed == 0) {
+            // ADC read with selection save
+            transition(nFsm, CLEANING);
+            return;
+        } else if (maintPressed == 1) {
+            // ADC read with selection save
+            transition(nFsm, REFILL);
+            return;
+        }
+    }
 }
 
 void rstAction(FSM* nFsm) {

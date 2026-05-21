@@ -24,6 +24,12 @@ void USART_send_string(char *str) {
     }
 }
 
+void USART_send_uint8(uint8_t val) {
+    char buf[4];
+    itoa(val, buf, 10);
+    USART_send_string(buf);
+}
+
 void sendScaleReading(double weight) {
     char buffer[16];
     dtostrf(weight, 8, 3, buffer);  // e.g. "  123.456"

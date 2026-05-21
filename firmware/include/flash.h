@@ -11,5 +11,6 @@ typedef struct {
 } Recipe;
 
 uint8_t getRecipeRatio(uint8_t recipe, uint8_t pump);
+void getRecipeName(uint8_t recipe, char *buf);
 
 #endif // !DEBUG
