@@ -2,7 +2,7 @@
 #include <avr/io.h>
 
 void adcInit(void) {
-    ADMUX = (1 << REFS1) | (1 << REFS0);
+    ADMUX = (1 << REFS0);
 
     ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1);
 }

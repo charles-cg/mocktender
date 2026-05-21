@@ -1,4 +1,5 @@
 #include "states.h"
+#include "ADC.h"
 #include "flash.h"
 #include "fsm.h"
 #include "interrupts.h"
@@ -6,31 +7,28 @@
 #include "config.h"
 #include "USART.h"
 #include "timers.h"
-#include <stdlib.h>
+#include <stdint.h>
+#include <util/delay.h>
 
 void handleCalibrate(FSM* nFsm) {
     // activate just INT2 (rst)
     GICR |= (1 << INT2);
     delayCheck = 0;
     delay30sDone = 0;
-    USART_send_string("Calibrating: warming up (30s)...\r\n");
     delay5s();
     // Let the HX711 + load cell thermally settle before taring,
     // otherwise warm-up drift makes the captured zero unstable.
     while (!delay30sDone) {
         if (rstPressed) {
             rstPressed = 0;
-            USART_send_string("Calibration reset\r\n");
             transition(nFsm, CALIBRATE);
             return;
         }
     }
-    USART_send_string("Taring...\r\n");
     (void)HX711_read_average(10);   // discard first batch
     HX711_tare(20);
     HX711_set_scale(715);
 
-    USART_send_string("Machine is ready\r\n");
     transition(nFsm, IDLE);
     return;
 }
@@ -43,6 +41,7 @@ void handleIdle(FSM* nFsm) {
         return;
     } else if (maintPressed) {
         maintPressed = 0;
+        GICR |= (1 << INT1); // activate start interrupt
         transition(nFsm, MAINTENANCE);
         return;
     }
@@ -50,8 +49,6 @@ void handleIdle(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
     if (weight < SCALE_DEADBAND && weight > -SCALE_DEADBAND) weight = 0;
     if (weight > CUP_PRESENT) {
-        USART_send_string("Cup placed: ");
-        sendScaleReading(weight);
         dataReady = 0;
         transition(nFsm, CUP_PLACED);
         return;
@@ -65,6 +62,7 @@ void handleCupPlaced(FSM* nFsm) {
         return;
     } else if (maintPressed) {
         maintPressed = 0;
+        GICR |= (1 << INT1); // activate start interrupt
         transition(nFsm, MAINTENANCE);
         return;
     }
@@ -72,7 +70,6 @@ void handleCupPlaced(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
-        USART_send_string("Cup removed\r\n");
         nFsm->cupClass = 0x00;
         transition(nFsm, IDLE);
         return;
@@ -97,13 +94,6 @@ void handleCupPlaced(FSM* nFsm) {
             default:  valid = 0;          break;
         }
         if (valid) {
-            char name[22];
-            getRecipeName(nFsm->recipeId, name);
-            USART_send_string("Recipe: ");
-            USART_send_string(name);
-            USART_send_string(" | Cup class: ");
-            USART_send_char(nFsm->cupClass);
-            USART_send_string("\r\n");
             transition(nFsm, DISPENSE);
         }
     }
@@ -111,28 +101,15 @@ void handleCupPlaced(FSM* nFsm) {
 }
 
 void handleDispense(FSM* nFsm) {
-    char name[22];
-    getRecipeName(nFsm->recipeId, name);
-    USART_send_string("Dispensing: ");
-    USART_send_string(name);
-    USART_send_string("\r\n");
-
     GICR &= ~(1 << INT0);
     for (globalPump = 0; globalPump < 6; globalPump++) {
         if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
-            uint8_t vol = calculateMl(nFsm, globalPump);
-            USART_send_string("Pump ");
-            USART_send_uint8(globalPump + 1);
-            USART_send_string(": ");
-            USART_send_uint8(vol);
-            USART_send_string(" mL\r\n");
             PORTC |= (1 << globalPump);
             pumpBusy = 1;
             TCNT1 = 0;
             dynamicDelay(nFsm, globalPump);
             while (pumpBusy) {
                 if (rstPressed) {
-                    USART_send_string("Dispense aborted\r\n");
                     rstAction(nFsm);
                     TCCR1B = 0x00;
                     TCNT1 = 0;
@@ -144,7 +121,6 @@ void handleDispense(FSM* nFsm) {
                 }
                 double weight = HX711_get_mean_units(10);
                 if (weight < CUP_PRESENT) {
-                    USART_send_string("Error: cup removed during dispense\r\n");
                     PORTC &= ~(1 << globalPump);
                     pumpBusy = 0;
                     globalPump = 0;
@@ -153,13 +129,9 @@ void handleDispense(FSM* nFsm) {
                     return;
                 }
             }
-            USART_send_string("Pump ");
-            USART_send_uint8(globalPump + 1);
-            USART_send_string(" done\r\n");
         }
     }
 
-    USART_send_string("Dispense complete\r\n");
     globalPump = 0;
     transition(nFsm, DELIVER);
     return;
@@ -169,7 +141,6 @@ void handleDeliver(FSM* nFsm) {
     double weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
-        USART_send_string("Order complete\r\n");
         nFsm->cupClass = 0x00;
         nFsm->recipeId = 0;
         transition(nFsm, IDLE);
@@ -178,12 +149,6 @@ void handleDeliver(FSM* nFsm) {
 }
 
 void handleError(FSM* nFsm) {
-    char buf[4];
-    USART_send_string("Error: 0x");
-    itoa(nFsm->errorCode, buf, 16);
-    USART_send_string(buf);
-    USART_send_string(" - press RST to continue\r\n");
-
     while (!rstPressed);
 
     rstAction(nFsm);
@@ -192,7 +157,10 @@ void handleError(FSM* nFsm) {
 }
 
 void handleMaintenance(FSM* nFsm) {
-    GICR |= (1 << INT1); // activate start interrupt
+    if (rstPressed) {
+        rstAction(nFsm);
+        transition(nFsm, IDLE);
+    }
 
     if (maintPressed == 2) {
         maintPressed = 0;
@@ -200,14 +168,36 @@ void handleMaintenance(FSM* nFsm) {
 
     if (startPressed) {
         if (maintPressed == 0) {
-            // ADC read with selection save
+            // ADC read with selection save by modifying globalPump
+            potClassify();
             transition(nFsm, CLEANING);
             return;
         } else if (maintPressed == 1) {
             // ADC read with selection save
+            potClassify();
             transition(nFsm, REFILL);
             return;
         }
+    }
+}
+
+void potClassify() {
+    uint16_t pot = adcRead(PA0);
+
+    if (pot <= PUMP1_2) {
+        globalPump = 0;
+    } else if (pot <= PUMP2_3) {
+        globalPump = 1;
+    } else if (pot <= PUMP3_4) {
+        globalPump = 2;
+    } else if (pot <= PUMP4_5) {
+        globalPump = 3;
+    } else if (pot <= PUMP5_6) {
+        globalPump = 4;
+    } else if (pot <= PUMP6_ALL) {
+        globalPump = 5;
+    } else if (pot <= PUMP_END) {
+        globalPump = 6; //place holder turns on all pumps
     }
 }
 

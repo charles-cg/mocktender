@@ -23,7 +23,11 @@ ISR(USART_RXC_vect) {
 ISR(TIMER1_COMPA_vect) {
     TCCR1B = 0x00;
     TIMSK &= ~(1 << OCIE1A);
-    PORTC &= ~(1 << globalPump);
+    if (globalPump == 6) {
+        PORTC &= ~(0b00111111);
+    } else {
+        PORTC &= ~(1 << globalPump);
+    }
     pumpBusy = 0;
 }
 

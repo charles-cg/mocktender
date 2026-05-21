@@ -20,4 +20,5 @@ uint8_t calculateMl(FSM* nFsm, uint8_t pump);
 uint16_t getCupSize(FSM* nFsm);
 void dynamicDelay (FSM* nFsm, uint8_t pump);
 void rstAction(FSM* nFsm);
+void potClassify();
 #endif // !DEBUG
