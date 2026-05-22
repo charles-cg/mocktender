@@ -24,7 +24,7 @@ void USART_send_string(char *str) {
     }
 }
 
-void sendScaleReading(double weight) {
+void sendScaleReading(float weight) {
     char buffer[16];
     dtostrf(weight, 8, 3, buffer);  // e.g. "  123.456"
     strcat(buffer, "\r\n");         // packet terminator

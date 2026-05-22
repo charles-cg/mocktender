@@ -13,9 +13,11 @@ void handleDeliver(FSM* nFsm);
 void handleMaintenance(FSM* nFsm);
 void handleCalibrate(FSM* nFsm);
 void handleError(FSM* nFsm);
+void handleCleaning(FSM* nFsm);
+void handleRefill(FSM* nFsm);
 
 //Helper functions
-char classifyCup(double weight);
+char classifyCup(float weight);
 uint8_t calculateMl(FSM* nFsm, uint8_t pump);
 uint16_t getCupSize(FSM* nFsm);
 void dynamicDelay (FSM* nFsm, uint8_t pump);

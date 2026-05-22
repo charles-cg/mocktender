@@ -1,6 +1,7 @@
 #include "interrupts.h"
 #include <avr/io.h>
 #include <stdint.h>
+#include <util/delay.h>
 
 volatile char packet = 0;
 volatile uint8_t dataReady = 0;
@@ -41,43 +42,29 @@ ISR(TIMER1_COMPB_vect) {
     }
 }
 
-ISR(TIMER2_COMP_vect) {
-    TCCR2 = 0;
-    TIMSK &= ~(1 << OCIE2);
-
+ISR(INT0_vect) {
+    _delay_ms(20);
     if (!(PIND & (1 << PD2))) {
         maintPressed += 1;
-    } else if (!(PIND & (1 << PD3))) {
+    }
+}
+
+ISR(INT1_vect) {
+    _delay_ms(20);
+    if (!(PIND & (1 << PD3))) {
         startPressed = 1;
-    } else if (!(PINB & (1 << PB2))) {
+    }
+}
+
+ISR(INT2_vect) {
+    _delay_ms(20);
+    if (!(PINB & (1 << PB2))) {
         rstPressed = 1;
     }
 }
 
-ISR(INT0_vect) {
-    TCNT2 = 0;
-    TIMSK |= (1 << OCIE2);
-    TCCR2 = (1 << CS22) | (1 << CS21) | (1 << CS20);
-}
-
-ISR(INT1_vect) {
-    TCNT2 = 0;
-    TIMSK |= (1 << OCIE2);
-    TCCR2 = (1 << CS22) | (1 << CS21) | (1 << CS20);
-}
-
-ISR(INT2_vect) {
-    TCNT2 = 0;
-    TIMSK |= (1 << OCIE2);
-    TCCR2 = (1 << CS22) | (1 << CS21) | (1 << CS20);
-}
 void detectModeInit() {
     // activates INT1 and INT0 on falling edge
     MCUCR = (1 << ISC11) | (1 << ISC01);
     // INT2 by default detects a falling-edge
-}
-
-void debounceInit() {
-    TCCR2 |= (1 << WGM21); //CTC mode, timer not started yet
-    OCR2 = 156; // OCR2 for 20 ms delay
 }

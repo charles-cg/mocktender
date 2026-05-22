@@ -15,7 +15,6 @@ int main (void) {
 
     // INITS
     detectModeInit();
-    debounceInit();
     adcInit();
     USART_init(MYUBRR);
     HX711_init(128);
@@ -52,6 +51,7 @@ int main (void) {
                 break;
             }
             case CLEANING: {
+                handleCleaning(&fsm);
                 break;
             }
             case REFILL: {

@@ -1,5 +1,6 @@
 #include "states.h"
 #include "ADC.h"
+#include "eeprom.h"
 #include "flash.h"
 #include "fsm.h"
 #include "interrupts.h"
@@ -7,6 +8,7 @@
 #include "config.h"
 #include "USART.h"
 #include "timers.h"
+#include <avr/io.h>
 #include <stdint.h>
 #include <util/delay.h>
 
@@ -46,7 +48,7 @@ void handleIdle(FSM* nFsm) {
         return;
     }
 
-    double weight = HX711_get_mean_units(10);
+    float weight = HX711_get_mean_units(10);
     if (weight < SCALE_DEADBAND && weight > -SCALE_DEADBAND) weight = 0;
     if (weight > CUP_PRESENT) {
         dataReady = 0;
@@ -67,7 +69,7 @@ void handleCupPlaced(FSM* nFsm) {
         return;
     }
 
-    double weight = HX711_get_mean_units(10);
+    float weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
         nFsm->cupClass = 0x00;
@@ -119,8 +121,10 @@ void handleDispense(FSM* nFsm) {
                     transition(nFsm, IDLE);
                     return;
                 }
-                double weight = HX711_get_mean_units(10);
+                float weight = HX711_get_mean_units(10);
                 if (weight < CUP_PRESENT) {
+                    TCCR1B = 0x00;
+                    TCNT1 = 0;
                     PORTC &= ~(1 << globalPump);
                     pumpBusy = 0;
                     globalPump = 0;
@@ -129,16 +133,18 @@ void handleDispense(FSM* nFsm) {
                     return;
                 }
             }
+            usedMl[globalPump] += calculateMl(nFsm, globalPump);
         }
     }
 
     globalPump = 0;
+    updateUsedMl(); // update used ML EEPROM
     transition(nFsm, DELIVER);
     return;
 }
 
 void handleDeliver(FSM* nFsm) {
-    double weight = HX711_get_mean_units(10);
+    float weight = HX711_get_mean_units(10);
 
     if (weight < CUP_PRESENT) {
         nFsm->cupClass = 0x00;
@@ -158,6 +164,7 @@ void handleError(FSM* nFsm) {
 
 void handleMaintenance(FSM* nFsm) {
     if (rstPressed) {
+        GICR &= ~(1 << INT1);
         rstAction(nFsm);
         transition(nFsm, IDLE);
     }
@@ -169,16 +176,60 @@ void handleMaintenance(FSM* nFsm) {
     if (startPressed) {
         if (maintPressed == 0) {
             // ADC read with selection save by modifying globalPump
+            startPressed = 0;
             potClassify();
             transition(nFsm, CLEANING);
             return;
         } else if (maintPressed == 1) {
             // ADC read with selection save
+            startPressed = 0;
             potClassify();
             transition(nFsm, REFILL);
             return;
         }
     }
+}
+
+void handleCleaning(FSM* nFsm) {
+    if (globalPump == 6) {
+        PORTC |= (0b00111111);
+        dynamicTimer(65535);
+        pumpBusy = 1;
+    } else {
+        PORTC |= (1 << globalPump);
+        dynamicTimer(65535);
+        pumpBusy = 1;
+    }
+
+    while (pumpBusy) {
+        if (rstPressed) {
+            TCCR1B = 0x00;
+            TCNT1 = 0;
+            PORTC &= ~(0b00111111);
+            rstAction(nFsm);
+            globalPump = 0;
+            GICR &= ~(1 << INT1);
+            transition(nFsm, IDLE);
+            return;
+        }
+
+        float weight = HX711_get_mean_units(10);
+        if (weight < CUP_PRESENT) {
+            TCCR1B = 0x00;
+            TCNT1 = 0;
+            PORTC &= ~(0b00111111);
+            rstAction(nFsm);
+            globalPump = 0;
+            nFsm->errorCode = 0x03;
+            GICR &= ~(1 << INT1);
+            transition(nFsm, ERROR);
+            return;
+        }
+    }
+
+    globalPump = 0;
+    transition(nFsm, IDLE);
+    return;
 }
 
 void potClassify() {
@@ -208,7 +259,7 @@ void rstAction(FSM* nFsm) {
     nFsm->errorCode = 0;
 }
 
-char classifyCup(double weight) {
+char classifyCup(float weight) {
     if (weight >= CUP_PRESENT && weight < SMALL_CUP) {
         return '1';
     } else if (weight >= SMALL_CUP && weight < MED_CUP) {

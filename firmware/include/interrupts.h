@@ -16,6 +16,5 @@ extern volatile uint8_t delayCheck;
 extern volatile uint8_t delay30sDone;
 
 void detectModeInit();
-void debounceInit();
 #endif // !INTERRUPTS_h
 
