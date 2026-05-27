@@ -6,8 +6,9 @@
 #include "interrupts.h"
 #include "HX711.h"
 #include "config.h"
-#include "USART.h"
 #include "timers.h"
+#include "USART.h"
+#include <avr/eeprom.h>
 #include <avr/io.h>
 #include <stdint.h>
 #include <util/delay.h>
@@ -18,13 +19,19 @@ void handleCalibrate(FSM* nFsm) {
     delayCheck = 0;
     delay30sDone = 0;
     delay5s();
-    // Let the HX711 + load cell thermally settle before taring,
-    // otherwise warm-up drift makes the captured zero unstable.
+    sendPacket(nFsm->cupClass, nFsm->state, nFsm->errorCode);
+    // Let the HX711 + load cell thermally settle before taring
+    uint8_t lastTick = 0;
     while (!delay30sDone) {
         if (rstPressed) {
             rstPressed = 0;
             transition(nFsm, CALIBRATE);
             return;
+        }
+        uint8_t tick = delayCheck;
+        if (tick != lastTick) {
+            lastTick = tick;
+            sendPacket(nFsm->cupClass, nFsm->state, nFsm->errorCode);
         }
     }
     (void)HX711_read_average(10);   // discard first batch
@@ -78,6 +85,7 @@ void handleCupPlaced(FSM* nFsm) {
     }
 
     nFsm->cupClass = classifyCup(weight);
+    sendPacket(nFsm->cupClass, nFsm->state, nFsm->errorCode);
 
     if (dataReady) {
         dataReady = 0;
@@ -104,6 +112,17 @@ void handleCupPlaced(FSM* nFsm) {
 
 void handleDispense(FSM* nFsm) {
     GICR &= ~(1 << INT0);
+
+    for (uint8_t p = 0; p < 6; p++) {
+        if (getRecipeRatio(nFsm->recipeId, p) == 0) continue;
+        uint16_t needMl = calculateMl(nFsm, p);
+        if ((uint32_t)usedMl[p] + needMl > totalMl[p]) {
+            nFsm->errorCode = 0x04 + p;
+            transition(nFsm, ERROR);
+            return;
+        }
+    }
+
     for (globalPump = 0; globalPump < 6; globalPump++) {
         if (getRecipeRatio(nFsm->recipeId, globalPump) != 0) {
             PORTC |= (1 << globalPump);
@@ -134,6 +153,7 @@ void handleDispense(FSM* nFsm) {
                 }
             }
             usedMl[globalPump] += calculateMl(nFsm, globalPump);
+            eeprom_update_word(&eeUsedMl[globalPump], usedMl[globalPump]);
         }
     }
 
@@ -155,18 +175,23 @@ void handleDeliver(FSM* nFsm) {
 }
 
 void handleError(FSM* nFsm) {
-    while (!rstPressed);
-
-    rstAction(nFsm);
-    transition(nFsm, IDLE);
-    return;
+    // Periodic ERROR broadcast lives in main.c (next to IDLE's 1 Hz tick);
+    // here we only watch for the reset button to release the FSM back to
+    // IDLE, which the app uses as the "operator acknowledged" signal.
+    if (rstPressed) {
+        rstAction(nFsm);
+        transition(nFsm, IDLE);
+        return;
+    }
 }
 
 void handleMaintenance(FSM* nFsm) {
     if (rstPressed) {
         GICR &= ~(1 << INT1);
         rstAction(nFsm);
+        maintPressed = 0;
         transition(nFsm, IDLE);
+        return;
     }
 
     if (maintPressed == 2) {
@@ -176,12 +201,14 @@ void handleMaintenance(FSM* nFsm) {
     if (startPressed) {
         if (maintPressed == 0) {
             // ADC read with selection save by modifying globalPump
+            maintPressed = 0;
             startPressed = 0;
             potClassify();
             transition(nFsm, CLEANING);
             return;
         } else if (maintPressed == 1) {
             // ADC read with selection save
+            maintPressed = 0;
             startPressed = 0;
             potClassify();
             transition(nFsm, REFILL);
@@ -212,6 +239,7 @@ void handleCleaning(FSM* nFsm) {
             transition(nFsm, IDLE);
             return;
         }
+        sendPacket(nFsm->cupClass, nFsm->state, nFsm->errorCode);
 
         float weight = HX711_get_mean_units(10);
         if (weight < CUP_PRESENT) {
@@ -228,8 +256,26 @@ void handleCleaning(FSM* nFsm) {
     }
 
     globalPump = 0;
+    GICR &= ~(1 << INT1);
     transition(nFsm, IDLE);
     return;
+}
+
+void handleRefill(FSM* nFsm) {
+    if (globalPump == 6) {
+        setUsedMl();
+        globalPump = 0;
+        GICR &= ~(1 << INT1);
+        transition(nFsm, IDLE);
+        return;
+    } else {
+        eeprom_update_word(&eeUsedMl[globalPump], 0);
+        usedMl[globalPump] = 0;
+        globalPump = 0;
+        GICR &= ~(1 << INT1);
+        transition(nFsm, IDLE);
+        return;
+    }
 }
 
 void potClassify() {
@@ -272,7 +318,7 @@ char classifyCup(float weight) {
 }
 
 void dynamicDelay (FSM* nFsm, uint8_t pump) {
-    uint8_t volume = calculateMl(nFsm, pump);
+    uint16_t volume = calculateMl(nFsm, pump);
     uint16_t time = calculateTime(volume);
     uint16_t ocr = calculateOCR1(time);
     dynamicTimer(ocr);
@@ -286,14 +332,14 @@ uint16_t calculateOCR1(uint16_t time_ms) {
 
 // Returns dispense duration in milliseconds.
 // 1000 ms/s / 26.67 mL/s = 75/2 ms per mL (exact).
-uint16_t calculateTime(uint8_t volume) {
-    return (uint16_t)volume * 75 / 2;
+uint16_t calculateTime(uint16_t volume) {
+    return volume * 75 / 2;
 }
 
-uint8_t calculateMl(FSM* nFsm, uint8_t pump) {
+uint16_t calculateMl(FSM* nFsm, uint8_t pump) {
     uint8_t ratio = getRecipeRatio(nFsm->recipeId, pump);
     uint16_t cupSize = getCupSize(nFsm);
-    uint8_t ml = (uint16_t)cupSize * ratio / 100;
+    uint16_t ml = (uint16_t)cupSize * ratio / 100;
     return ml;
 }
 

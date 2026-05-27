@@ -3,6 +3,7 @@
 #include "USART.h"
 #include "HX711.h"
 #include "config.h"
+#include "eeprom.h"
 #include "fsm.h"
 #include "states.h"
 #include "ADC.h"
@@ -18,6 +19,7 @@ int main (void) {
     adcInit();
     USART_init(MYUBRR);
     HX711_init(128);
+    eepromInit();
     // PORTC as output
     DDRC = 0xFF;
     FSM fsm = {CALIBRATE, CALIBRATE, 0, 0, 0};
@@ -31,6 +33,7 @@ int main (void) {
             }
             case IDLE: {
                 _delay_ms(1000);
+                sendPacket(fsm.cupClass, fsm.state, fsm.errorCode);
                 handleIdle(&fsm);
                 break;
             }
@@ -55,9 +58,15 @@ int main (void) {
                 break;
             }
             case REFILL: {
+                handleRefill(&fsm);
                 break;
             }
             case ERROR: {
+                // Throttle the ERROR broadcast to ~1 Hz so the BLE bridge
+                // isn't saturated while the user reads the message — same
+                // pattern as IDLE.
+                _delay_ms(1000);
+                sendPacket(fsm.cupClass, fsm.state, fsm.errorCode);
                 handleError(&fsm);
                 break;
             }

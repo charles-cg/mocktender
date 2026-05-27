@@ -1,12 +1,34 @@
 #include "eeprom.h"
 #include <avr/eeprom.h>
+
+#define EEPROM_MAGIC 0xCE
+#define BOTTLE_CAPACITY_ML 750
+
+uint8_t EEMEM magicByte = EEPROM_MAGIC;
+uint16_t EEMEM eeTotalMl[6];
+uint16_t EEMEM eeUsedMl[6];
+
+volatile uint16_t totalMl[6];
+volatile uint16_t usedMl[6];
+
 void eepromInit() {
-    if (eeprom_read_byte(&magicByte) != 0xCD) {
+    uint8_t needReset = (eeprom_read_byte(&magicByte) != EEPROM_MAGIC);
+    if (!needReset) {
         for (int i = 0; i < 6; i++) {
-            eeprom_update_word(&eeTotalMl[i], 750);
+            uint16_t total = eeprom_read_word(&eeTotalMl[i]);
+            uint16_t used  = eeprom_read_word(&eeUsedMl[i]);
+            if (total != BOTTLE_CAPACITY_ML || used > total) {
+                needReset = 1;
+                break;
+            }
+        }
+    }
+    if (needReset) {
+        for (int i = 0; i < 6; i++) {
+            eeprom_update_word(&eeTotalMl[i], BOTTLE_CAPACITY_ML);
             eeprom_update_word(&eeUsedMl[i], 0);
         }
-        eeprom_update_byte(&magicByte, 0xCD);
+        eeprom_update_byte(&magicByte, EEPROM_MAGIC);
     }
     eepromLoadInventory();
 }
@@ -21,5 +43,12 @@ void eepromLoadInventory() {
 void updateUsedMl() {
     for (int i = 0; i < 6; i++) {
         eeprom_update_word(&eeUsedMl[i], usedMl[i]);
+    }
+}
+
+void setUsedMl() {
+    for (int i = 0; i < 6; i++) {
+        usedMl[i] = 0;
+        eeprom_update_word(&eeUsedMl[i], 0);
     }
 }

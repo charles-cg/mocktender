@@ -4,15 +4,16 @@
 #include <avr/eeprom.h>
 #include <stdint.h>
 
-uint8_t EEMEM magicByte = 0xCD;
-uint16_t EEMEM eeTotalMl[6];
-uint16_t EEMEM eeUsedMl[6];
+extern uint8_t EEMEM magicByte;
+extern uint16_t EEMEM eeTotalMl[6];
+extern uint16_t EEMEM eeUsedMl[6];
 
-uint16_t totalMl[6];
-uint16_t usedMl[6];
+extern volatile uint16_t totalMl[6];
+extern volatile uint16_t usedMl[6];
 
 void eepromInit();
 void eepromLoadInventory();
 void updateUsedMl();
+void setUsedMl();
 
 #endif
