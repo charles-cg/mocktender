@@ -27,19 +27,59 @@ struct RootView: View {
                                   onCupRemoved: cupRemoved)
                 }
 
-                if let e = ble.lastError {
-                    ErrorOverlay(
-                        kind: e,
-                        onDismiss: { ble.lastError = nil; cancelDispense() },
-                        onRetry:   { ble.lastError = nil; startDispense() }
-                    )
-                    .zIndex(80)
+                // Machine-state overlays. Calibrate / Maintenance / Cleaning
+                // fully cover the current screen until the firmware moves on.
+                // Only one is ever visible at a time — they're driven directly
+                // by the FSM state byte in the BLE packet.
+                if ble.machineState == .calibrate {
+                    CalibrationOverlay()
+                        .zIndex(70)
+                }
+                if ble.machineState == .maintenance {
+                    MaintenanceOverlay()
+                        .zIndex(70)
+                }
+                if ble.machineState == .cleaning {
+                    CleaningOverlay()
+                        .zIndex(70)
+                }
+
+                // Refill confirmation banner, slides in over the top of any
+                // active screen and auto-dismisses (BluetoothManager clears
+                // it after ~3 s).
+                if let r = ble.refillBanner {
+                    VStack {
+                        RefillBanner(data: r)
+                            .padding(.top, 56)
+                        Spacer()
+                    }
+                    .zIndex(75)
+                }
+                if let l = ble.lowBottleBanner {
+                    VStack {
+                        LowBottleBanner(data: l)
+                            .padding(.top, 56)
+                        Spacer()
+                    }
+                    .zIndex(76)
+                }
+
+                // Firmware-driven hard error: cover the entire app, block
+                // every gesture, and wait for the physical reset button. The
+                // firmware emits state == .error continuously until reset; the
+                // next non-error packet flips machineState and hides this.
+                if ble.machineState == .error {
+                    MachineErrorScreen(kind: ble.lastError)
+                        .zIndex(90)
                 }
             }
         }
         .ignoresSafeArea()
         .foregroundStyle(dispenseActive ? Color.white : Color(hex: 0x0A2350))
         .animation(.easeInOut(duration: 0.25), value: app.screen)
+        .animation(.easeInOut(duration: 0.25), value: ble.machineState)
+        .animation(.easeInOut(duration: 0.25), value: ble.refillBanner)
+        .animation(.easeInOut(duration: 0.25), value: ble.lowBottleBanner)
     }
 
     // MARK: - Dispense lifecycle

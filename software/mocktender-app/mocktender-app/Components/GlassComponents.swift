@@ -249,8 +249,12 @@ struct GlassButton: View {
 
 struct StatusPill: View {
     let connected: Bool
+    var onTap: (() -> Void)? = nil
     var body: some View {
-        HeaderPill(style: .data) {
+        HeaderPill(
+            style: connected ? .data : .button,
+            action: connected ? nil : onTap
+        ) {
             Circle()
                 .fill(connected ? Color(hex: 0x22C769) : Color(hex: 0xC52C2C))
                 .frame(width: 7, height: 7)

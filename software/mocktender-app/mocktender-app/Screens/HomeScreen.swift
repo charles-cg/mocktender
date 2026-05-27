@@ -53,7 +53,7 @@ struct HomeScreen: View {
 
     private var navBar: some View {
         HStack(alignment: .center) {
-            StatusPill(connected: ble.isConnected)
+            StatusPill(connected: ble.isConnected) { app.screen = .connect }
             Spacer()
             HStack(spacing: 6) {
                 BottlesPill(bottles: ble.bottles) { app.screen = .bottles }

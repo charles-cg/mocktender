@@ -17,11 +17,11 @@ struct BottlesScreen: View {
                         .padding(.bottom, 22)
 
                     GlassPanel(padding: 18) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3),
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2),
                                   spacing: 22) {
                             ForEach(ble.bottles) { b in
                                 if let p = Catalog.pump(b.id) {
-                                    BottleStrip(pump: p, remaining: b.remaining)
+                                    BottleStrip(pump: p, remaining: b.remaining, capacity: b.capacity)
                                 }
                             }
                         }

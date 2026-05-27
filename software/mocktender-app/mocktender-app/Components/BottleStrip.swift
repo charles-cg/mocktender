@@ -3,7 +3,7 @@ import SwiftUI
 struct BottleStrip: View {
     let pump: Pump
     let remaining: Double
-    var capacity: Double = 1000
+    var capacity: Double = 750
 
     var body: some View {
         let pct = max(0, min(1, remaining / capacity))
@@ -63,9 +63,12 @@ struct BottleStrip: View {
                     radius: 6, x: 0, y: 4)
 
             VStack(spacing: 2) {
-                Text(pump.short)
-                    .font(.system(size: 12, weight: .bold))
+                Text(pump.name)
+                    .font(.system(size: 13, weight: .bold))
+                    .kerning(-0.2)
                     .foregroundStyle(Color(hex: 0x0A2350))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Text("\(Int(remaining.rounded())) ml")
                     .font(.system(size: 11, weight: .semibold))
                     .monospacedDigit()

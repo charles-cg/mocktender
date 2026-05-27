@@ -35,8 +35,36 @@ final class BluetoothManager: NSObject {
     /// running on the machine; the UI surfaces the Connect screen only after
     /// the cup is removed.
     var bleLostDuringDispense: Bool = false
-    var cupSize: CupSize = .medium
-    var bottles: [Bottle] = Catalog.pumps.map { Bottle(id: $0.id, remaining: 1000 - Double.random(in: 0...250)) }
+    /// Cup size as last reported by the firmware. Defaults to `.empty` — the
+    /// app blocks dispense until the tray load cell confirms a real cup is
+    /// present (mirrors firmware `classifyCup`).
+    var cupSize: CupSize = .empty
+    /// Transient banner driven by REFILL→IDLE transitions in the firmware.
+    /// Surfaces which bottle (or "all") was just refilled. Cleared by a
+    /// short-lived task spawned in `apply(packet:)`.
+    var refillBanner: RefillBannerData? = nil
+    /// In-app "bottle just hit 15%" banner. Surfaced by `NotificationManager`
+    /// when the app is foregrounded (the system notification is suppressed in
+    /// that case). Auto-clears after ~3 s.
+    var lowBottleBanner: LowBottleBannerData? = nil
+    private var lowBottleBannerTask: Task<Void, Never>?
+
+    func surfaceLowBottleBanner(_ data: LowBottleBannerData) {
+        lowBottleBannerTask?.cancel()
+        lowBottleBanner = data
+        lowBottleBannerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            if self?.lowBottleBanner?.id == data.id {
+                self?.lowBottleBanner = nil
+            }
+        }
+    }
+    /// Bottles start full at the firmware's per-bottle EEPROM capacity (750 mL,
+    /// see firmware/src/eeprom.c). Real `remaining` arrives from the machine's
+    /// status packets — `capacity - usedMl[i]`.
+    var bottles: [Bottle] = Catalog.pumps.map { Bottle(id: $0.id, remaining: 750, capacity: 750) }
+    var machineState: FirmwareState = .idle
     var lastError: MachineError? = nil
 
     /// Pour progress 0…1. Until the firmware streams real progress packets,
@@ -76,6 +104,21 @@ final class BluetoothManager: NSObject {
     /// True when `startScan` was called before the central reached
     /// `.poweredOn`. We retry once the state callback fires.
     private var pendingScan = false
+    /// Streaming UART parser for inbound status packets from the Atmega.
+    private var packetParser = PacketParser()
+    /// Last `machineState` we observed. Used to detect the IDLE→ERROR
+    /// transition so we only surface the overlay once per fault — the firmware
+    /// keeps re-sending the ERROR packet ~1×/s and we don't want it popping
+    /// back up after the user dismisses it.
+    private var previousMachineState: FirmwareState = .idle
+    /// Previous packet's `usedMl[]`. Used to detect REFILL→IDLE transitions
+    /// per pump (non-zero → 0) so we can show which bottle was refilled.
+    private var previousUsedMl: [UInt16] = Array(repeating: 0, count: 6)
+    /// True once we've consumed at least one machine packet. Until then we
+    /// avoid edge-triggering anything on initial defaults vs. live state.
+    private var hasSeenPacket = false
+    /// Task that auto-dismisses the refill banner after a few seconds.
+    private var refillBannerTask: Task<Void, Never>?
 
     override private init() {
         super.init()
@@ -228,8 +271,17 @@ final class BluetoothManager: NSObject {
         // into the percentage counter.
         let msPerMl = 75.0 / 2.0    // 37.5
         let pumpInitMs = 350.0 / max(0.1, speed)
-        let totalMs = max(100.0, Double(cup.ml) * msPerMl / max(0.1, speed))
         let stepMs: Double = 33
+
+        // firmware/src/states.c::handleDispense polls HX711_get_mean_units(10)
+        // inside its per-pump busy-wait loop. With the HX711 at ~10 SPS a
+        // single 10-sample read blocks ~1 s, so when TIMER1_COMPA_vect fires
+        // the loop doesn't notice pumpBusy=0 until the in-flight read
+        // finishes — average ~500 ms, worst-case ~1 s. Pure C overhead
+        // between pumps (for-tick + getRecipeRatio + PORTC set + dynamicDelay
+        // chain) is ~640 cycles at 8 MHz ≈ 80 µs, i.e. invisible. Modelling
+        // the HX711-bound gap is what makes the bar + lights match hardware.
+        let interPumpGapMs: Double = 500.0 / max(0.1, speed)
 
         // Pump-init pause — progress visibly idles at 0 while the
         // machine wakes up.
@@ -239,19 +291,12 @@ final class BluetoothManager: NSObject {
             if Task.isCancelled { return }
         }
 
-        let start = Date()
-
-        let sequence: [(pump: String, endPct: Double)] = {
-            var acc: [(String, Double)] = []
-            var running = 0.0
-            for pump in Catalog.pumps {
-                if let pct = drink.ratios[pump.id], pct > 0 {
-                    running += Double(pct)
-                    acc.append((pump.id, running))
-                }
-            }
-            return acc
-        }()
+        // Per-pump segments in the order the firmware visits them (P1…P6).
+        let segments: [(pumpId: String, ml: Double)] = Catalog.pumps.compactMap { p in
+            guard let pct = drink.ratios[p.id], pct > 0 else { return nil }
+            return (p.id, Double(pct) / 100.0 * Double(cup.ml))
+        }
+        let totalMl = max(1.0, Double(cup.ml))
 
         let errorAt: Double? = {
             switch injectError {
@@ -261,39 +306,62 @@ final class BluetoothManager: NSObject {
             }
         }()
 
+        var dispensedMl: Double = 0
         var firedDisconnect = false
-        while dispenseProgress < 1.0 {
-            try? await Task.sleep(for: .milliseconds(Int(stepMs)))
-            if Task.isCancelled { return }
-            let elapsed = Date().timeIntervalSince(start) * 1000
-            let p = min(1.0, elapsed / totalMs)
-            dispenseProgress = p
 
-            for i in bottles.indices {
-                if let pct = drink.ratios[bottles[i].id], pct > 0 {
-                    let drain = (Double(pct) / 100.0) * Double(cup.ml) * (stepMs / totalMs)
-                    bottles[i].remaining = max(0, bottles[i].remaining - drain)
+        for (idx, seg) in segments.enumerated() {
+            activePumpId = seg.pumpId
+            let segMs = max(1.0, seg.ml * msPerMl / max(0.1, speed))
+            let segStart = Date()
+
+            var segElapsed: Double = 0
+            while segElapsed < segMs {
+                try? await Task.sleep(for: .milliseconds(Int(stepMs)))
+                if Task.isCancelled { return }
+                segElapsed = Date().timeIntervalSince(segStart) * 1000
+                let segFrac = min(1.0, segElapsed / segMs)
+                dispenseProgress = min(1.0, (dispensedMl + segFrac * seg.ml) / totalMl)
+
+                if let bIdx = bottles.firstIndex(where: { $0.id == seg.pumpId }) {
+                    let drain = seg.ml * (stepMs / segMs)
+                    bottles[bIdx].remaining = max(0, bottles[bIdx].remaining - drain)
+                }
+
+                if let errAt = errorAt, dispenseProgress * 100 >= errAt {
+                    if injectDisconnect {
+                        if !firedDisconnect {
+                            firedDisconnect = true
+                            isConnected = false
+                            bleLostDuringDispense = true
+                        }
+                    } else if let e = injectError {
+                        lastError = e
+                        // Mirror the firmware: an injected fault drives the
+                        // FSM into ERROR so MachineErrorScreen takes over.
+                        machineState = .error
+                        previousMachineState = .error
+                        onError()
+                        return
+                    }
                 }
             }
 
-            let cur = sequence.first { (p * 100) < $0.endPct }
-            activePumpId = cur?.pump
+            dispensedMl += seg.ml
+            dispenseProgress = min(1.0, dispensedMl / totalMl)
 
-            if let errAt = errorAt, p * 100 >= errAt {
-                if injectDisconnect {
-                    if !firedDisconnect {
-                        firedDisconnect = true
-                        isConnected = false
-                        bleLostDuringDispense = true
-                    }
-                } else if let e = injectError {
-                    lastError = e
-                    onError()
-                    return
+            // Inter-pump gap: HX711 sample-wait drains out before the next
+            // pump's PORTC bit goes high. Lights off, bar holds.
+            if idx < segments.count - 1 {
+                activePumpId = nil
+                let gapSteps = max(1, Int(interPumpGapMs / stepMs))
+                for _ in 0..<gapSteps {
+                    try? await Task.sleep(for: .milliseconds(Int(stepMs)))
+                    if Task.isCancelled { return }
                 }
             }
         }
 
+        dispenseProgress = 1.0
         activePumpId = nil
         onComplete()
     }
@@ -302,8 +370,9 @@ final class BluetoothManager: NSObject {
     func setSimulatedCupSize(_ size: CupSize) { cupSize = size }
     func refill(pumpId: String) {
         if let idx = bottles.firstIndex(where: { $0.id == pumpId }) {
-            bottles[idx].remaining = 1000
+            bottles[idx].remaining = bottles[idx].capacity
         }
+        NotificationManager.shared.refresh(bottles: bottles)
     }
     func reportCupRemoved() {
         // Atmega tray load-cell reports tray empty.
@@ -427,6 +496,12 @@ extension BluetoothManager: CBPeripheralDelegate {
             txChar = c
             isConnected = true
             lastTxError = nil
+            // The HM-10/BT-05 family uses one characteristic for both TX and
+            // RX. Enable notifications so the Atmega's status packets land in
+            // didUpdateValueFor.
+            if c.properties.contains(.notify) || c.properties.contains(.indicate) {
+                peripheral.setNotifyValue(true, for: c)
+            }
         }
     }
 
@@ -435,6 +510,121 @@ extension BluetoothManager: CBPeripheralDelegate {
                     error: Error?) {
         if let error {
             lastTxError = "Write failed: \(error.localizedDescription)"
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
+                    didUpdateValueFor characteristic: CBCharacteristic,
+                    error: Error?) {
+        guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
+        let packets = packetParser.feed(data)
+        guard let pkt = packets.last else { return }
+        apply(packet: pkt)
+    }
+}
+
+// MARK: - Inbound packet application
+
+private extension BluetoothManager {
+    func apply(packet: MachinePacket) {
+        // Cup class — '0'=empty, '1'..'3'=small/medium/large. Drives the
+        // CupSizeBadge, the per-drink mL math, and the Dispense gating.
+        cupSize = CupSize(firmwareByte: packet.cupClass)
+
+        // Bottles: Catalog.pumps is ordered P1…P6, which matches the firmware's
+        // usedMl[0…5] / OJ-PJ-CJ-LJ-GR-GS order. Capacity is fixed at the
+        // EEPROM total (750 mL); remaining = capacity - usedMl.
+        for (idx, pump) in Catalog.pumps.enumerated() {
+            guard let bIdx = bottles.firstIndex(where: { $0.id == pump.id }) else { continue }
+            let used = Double(packet.usedMl[idx])
+            let cap = bottles[bIdx].capacity
+            bottles[bIdx].remaining = max(0, cap - used)
+        }
+
+        // Edge-trigger on the transition OUT of error (firmware reset
+        // button → back to IDLE). Clear lastError and any stale dispense
+        // routing so the next pour starts clean.
+        if packet.state != .error && previousMachineState == .error {
+            lastError = nil
+            bleLostDuringDispense = false
+        }
+
+        // Edge-trigger on the transition INTO error so the overlay only fires
+        // once per fault, not every second while the firmware re-broadcasts.
+        if packet.state == .error && previousMachineState != .error {
+            lastError = machineError(for: packet.errorCode)
+            // A live pour is now invalid — kill the local simulation clock so
+            // the progress bar stops advancing behind the overlay.
+            dispenseTask?.cancel()
+            dispenseTask = nil
+            dispenseProgress = 0
+            activePumpId = nil
+        }
+
+        // Refill detection: diff usedMl against the previous packet. Any
+        // pump that just went from non-zero to zero is a refill — handleRefill
+        // in firmware/src/states.c is the only code path that ever zeroes
+        // usedMl (single-pump branch or globalPump == 6 / all). We don't gate
+        // on the REFILL→IDLE state transition because the firmware emits the
+        // REFILL packet and the IDLE packet back-to-back (~120 ms apart over
+        // a single transition()→handleRefill()→transition() cycle), and the
+        // HM-10 bridge sometimes coalesces or drops one of them. The diff
+        // itself is the unambiguous signal.
+        if hasSeenPacket {
+            let cleared = (0..<6).filter { previousUsedMl[$0] > 0 && packet.usedMl[$0] == 0 }
+            let banner: RefillBannerData? = {
+                if cleared.count >= 2 {
+                    return RefillBannerData(pumpShort: nil)
+                } else if let idx = cleared.first,
+                          Catalog.pumps.indices.contains(idx) {
+                    return RefillBannerData(pumpShort: Catalog.pumps[idx].short)
+                } else {
+                    return nil
+                }
+            }()
+            if let b = banner {
+                surfaceRefillBanner(b)
+            }
+        }
+
+        previousUsedMl = packet.usedMl
+        previousMachineState = packet.state
+        machineState = packet.state
+        hasSeenPacket = true
+
+        NotificationManager.shared.refresh(bottles: bottles)
+    }
+
+    private func surfaceRefillBanner(_ data: RefillBannerData) {
+        refillBannerTask?.cancel()
+        refillBanner = data
+        refillBannerTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            if self?.refillBanner?.id == data.id {
+                self?.refillBanner = nil
+            }
+        }
+    }
+
+    /// Maps firmware error codes (firmware/src/states.c) to the app's UI-level
+    /// error enum.
+    ///   0x01 / 0x02 / 0x03 — "no cup on the scale", raised from mid-pour /
+    ///                        pre-pour / post-pour. Collapse to .cupRemoved.
+    ///   0x04..0x09        — low liquid; (code - 0x04) is the pump index
+    ///                        (P1..P6) that would have run dry.
+    private func machineError(for code: UInt8) -> MachineError {
+        switch code {
+        case 0x01, 0x02, 0x03:
+            return .cupRemoved
+        case 0x04...0x09:
+            let pumpIdx = Int(code - 0x04)
+            let short = Catalog.pumps.indices.contains(pumpIdx)
+                ? Catalog.pumps[pumpIdx].short
+                : "?"
+            return .lowLiquid(pumpShort: short)
+        default:
+            return .cupRemoved
         }
     }
 }

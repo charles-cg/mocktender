@@ -21,6 +21,17 @@ struct Drink: Identifiable, Hashable {
 enum CupSize: String, CaseIterable, Identifiable {
     case empty, small, medium, large
     var id: String { rawValue }
+    /// Maps the firmware's ASCII cup byte (`classifyCup` in
+    /// firmware/src/states.c — '0'=empty, '1'=small, '2'=medium, '3'=large)
+    /// to the matching `CupSize`. Anything else is treated as no cup.
+    init(firmwareByte: UInt8) {
+        switch firmwareByte {
+        case 0x31: self = .small
+        case 0x32: self = .medium
+        case 0x33: self = .large
+        default:   self = .empty
+        }
+    }
     var label: String {
         switch self {
         case .empty:  return "No cup"
@@ -64,13 +75,33 @@ enum CupSize: String, CaseIterable, Identifiable {
 
 struct Bottle: Identifiable, Hashable {
     let id: String           // matches Pump.id
-    var remaining: Double    // ml, capacity = 1000
+    var remaining: Double    // ml
+    /// Per-bottle capacity in mL. Default matches the firmware's EEPROM
+    /// initial value (`eeTotalMl[i] = 750` in firmware/src/eeprom.c).
+    var capacity: Double = 750
 }
 
 enum MachineError: Equatable {
     case cupRemoved
     case lowLiquid(pumpShort: String)
     case disconnected
+}
+
+/// Transient banner shown after the firmware completes a REFILL transition.
+/// `pumpShort == nil` represents an "all bottles refilled" event (the
+/// firmware's `globalPump == 6` branch in `handleRefill`).
+struct RefillBannerData: Identifiable, Equatable {
+    let id = UUID()
+    let pumpShort: String?
+}
+
+/// In-app banner shown when a bottle's `remaining` first crosses the 15%
+/// refill threshold while the app is foregrounded — replaces the system
+/// notification in that case so it doesn't pop over the running UI.
+struct LowBottleBannerData: Identifiable, Equatable {
+    let id = UUID()
+    let pumpName: String
+    let pumpShort: String
 }
 
 enum Screen: Hashable {

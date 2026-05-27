@@ -57,23 +57,24 @@ struct DeliverScreen: View {
             }
 
             Spacer()
-
-            // Prototype affordance — the real app reads the cup-lifted packet.
-            Button(action: onCupRemoved) {
-                Text("Simulate cup removal")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .background(
-                        Capsule().fill(Color.white.opacity(0.16))
-                            .background(Capsule().fill(.ultraThinMaterial))
-                            .overlay(Capsule().stroke(Color.white.opacity(0.4), lineWidth: 0.5))
-                    )
+        }
+        // Real cup-lifted detection. The firmware's handleDeliver loop polls
+        // the load cell every ~1 s and transitions to IDLE the moment weight
+        // drops below CUP_PRESENT — at that point cupClass is reset to 0 and
+        // the next packet sets ble.cupSize back to .empty. Watch that
+        // transition and advance the screen.
+        .onChange(of: ble.cupSize) { _, newValue in
+            if newValue == .empty {
+                onCupRemoved()
             }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 22)
-            .padding(.bottom, 36)
+        }
+        .onAppear {
+            // Defensive: if for any reason we arrive on deliver with the cup
+            // already reported empty (e.g. the user pulled the cup before
+            // the dispense→deliver packet was processed), fire immediately.
+            if ble.cupSize == .empty {
+                onCupRemoved()
+            }
         }
     }
 }

@@ -1,9 +1,11 @@
 import SwiftUI
 
+// Single-button error overlay. The machine has no resume path today, so the
+// only outcome is "close the overlay and bail out of the pour" — the caller
+// passes that as `onDismiss`.
 struct ErrorOverlay: View {
     let kind: MachineError
     var onDismiss: () -> Void
-    var onRetry: () -> Void
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -36,12 +38,7 @@ struct ErrorOverlay: View {
                         }
                         Spacer()
                     }
-                    HStack(spacing: 10) {
-                        if let s = secondary {
-                            GlassButton(title: s, full: true, action: onDismiss)
-                        }
-                        GlassButton(title: primary, primary: true, full: true, action: onRetry)
-                    }
+                    GlassButton(title: "Exit", primary: true, full: true, action: onDismiss)
                 }
             }
             .padding(.horizontal, 14)
@@ -59,22 +56,12 @@ struct ErrorOverlay: View {
     }
     private var desc: String {
         switch kind {
-        case .cupRemoved:   return "Place the cup back to resume."
-        case .lowLiquid:    return "Refill to finish this drink."
+        case .cupRemoved:   return "The cup was removed before the pour finished."
+        case .lowLiquid(let pumpShort):
+            return pumpShort.isEmpty
+                ? "Refill the bottle and try again."
+                : "Refill the \(pumpShort) bottle and try again."
         case .disconnected: return "Move closer to the machine."
-        }
-    }
-    private var primary: String {
-        switch kind {
-        case .cupRemoved:   return "Resume"
-        case .lowLiquid:    return "Retry"
-        case .disconnected: return "Reconnect"
-        }
-    }
-    private var secondary: String? {
-        switch kind {
-        case .cupRemoved, .lowLiquid: return "Cancel"
-        case .disconnected:            return "Close"
         }
     }
 }
