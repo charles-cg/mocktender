@@ -60,12 +60,29 @@ final class BluetoothManager: NSObject {
             }
         }
     }
-    /// Bottles start full at the firmware's per-bottle EEPROM capacity (750 mL,
-    /// see firmware/src/eeprom.c). Real `remaining` arrives from the machine's
+    /// Bottles start full at each pump's EEPROM capacity (Pump.capacityMl,
+    /// mirroring firmware bottleCapacityMl[]). Real `remaining` arrives from the machine's
     /// status packets — `capacity - usedMl[i]`.
-    var bottles: [Bottle] = Catalog.pumps.map { Bottle(id: $0.id, remaining: 750, capacity: 750) }
+    var bottles: [Bottle] = Catalog.pumps.map { Bottle(id: $0.id, remaining: $0.capacityMl, capacity: $0.capacityMl) }
     var machineState: FirmwareState = .idle
     var lastError: MachineError? = nil
+
+    /// Which sub-mode the operator has selected on the front panel while the
+    /// machine sits in MAINTENANCE. The firmware repurposes the packet's cup
+    /// field there ('0' = clean, '1' = refill — see firmware
+    /// handleMaintenance) and emits a fresh packet each time the maintenance
+    /// button toggles the choice. Defaults to `.clean`, matching the firmware
+    /// which always enters maintenance with the clean option selected.
+    enum MaintenanceMode { case clean, refill }
+    var maintenanceMode: MaintenanceMode = .clean
+
+    /// Which pump the operator currently has dialled in on the front-panel pot
+    /// while the machine sits in MAINTENANCE. The firmware classifies the pot
+    /// into globalPump (0…5 = a single pump P1…P6, 6 = all pumps) and rides
+    /// that index in the packet's error field (meaningless otherwise in
+    /// maintenance — see firmware handleMaintenance). `nil` until the first
+    /// maintenance packet arrives.
+    var maintenanceSelectedPump: Int? = nil
 
     /// Pour progress 0…1. Until the firmware streams real progress packets,
     /// this is driven by the local `simulateDispense` clock so the UI animates.
@@ -207,14 +224,33 @@ final class BluetoothManager: NSObject {
         return true
     }
 
+    /// User hit Cancel in the app. Tell the machine to abort the live pour
+    /// ('C' is latched into the firmware's `cancelPressed` and polled in
+    /// handleDispense/handleCleaning, exactly like the physical reset button —
+    /// see firmware/src/interrupts.c), then stop the local progress clock.
     func cancelDispense() {
-        // The firmware ignores anything outside '1'..'9','A', so there's no
-        // explicit cancel byte today. We stop the local sim and surface the
-        // cancel in the UI; a future firmware change can add a cancel char.
+        sendByte(UInt8(ascii: "C"))
+        stopLocalDispense()
+    }
+
+    /// Stop only the local pour simulation, without sending anything to the
+    /// machine. Used when the firmware itself reports the pour already ended
+    /// (operator pressed reset, or the pour finished) so we don't echo a
+    /// stray cancel back at an idle machine.
+    func stopLocalDispense() {
         dispenseTask?.cancel()
         dispenseTask = nil
         dispenseProgress = 0
         activePumpId = nil
+    }
+
+    /// Write a single raw byte to the bridge's TX characteristic. No-op when
+    /// disconnected.
+    private func sendByte(_ byte: UInt8) {
+        guard let p = peripheral, let c = txChar else { return }
+        let writeType: CBCharacteristicWriteType =
+            c.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+        p.writeValue(Data([byte]), for: c, type: writeType)
     }
 
     func disconnect() {
@@ -257,11 +293,13 @@ final class BluetoothManager: NSObject {
                                       onError: @MainActor @escaping () -> Void,
                                       onComplete: @MainActor @escaping () -> Void) async {
 
-        // Total pour time mirrors firmware/src/states.c::calculateTime():
-        //   time_ms = volume_ml * 75 / 2  =>  37.5 ms per mL
-        // i.e. the 26.67 mL/s flow rate declared in firmware/include/config.h
-        // (`FLOWRATE_X100 = 2667`). `speed` is a dev-only tweak; on hardware
-        // it's pinned at 1.0×.
+        // Per-pump pour time mirrors firmware/src/states.c::calculateTime():
+        //   time_ms = volume_mL * 100000 / FLOWRATE_PUMPn_X100
+        // i.e. 1000 / flowRateMlPerSec ms per mL, evaluated per pump from the
+        // calibrated rates in firmware/include/config.h (now individual per
+        // pump, not the old shared 26.67 mL/s). The msPerMl is computed inside
+        // the per-pump segment loop below. `speed` is a dev-only tweak; on
+        // hardware it's pinned at 1.0×.
         //
         // The machine takes a beat between receiving the recipe char and the
         // first pump spinning up (UART RX → ISR latch → main-loop transition
@@ -269,7 +307,6 @@ final class BluetoothManager: NSObject {
         // which `dispenseProgress` stays at 0 and no pump is active — gives
         // the UI a calmer "getting ready" moment instead of jumping straight
         // into the percentage counter.
-        let msPerMl = 75.0 / 2.0    // 37.5
         let pumpInitMs = 350.0 / max(0.1, speed)
         let stepMs: Double = 33
 
@@ -292,9 +329,11 @@ final class BluetoothManager: NSObject {
         }
 
         // Per-pump segments in the order the firmware visits them (P1…P6).
-        let segments: [(pumpId: String, ml: Double)] = Catalog.pumps.compactMap { p in
+        // Each carries its own ms-per-mL derived from that pump's calibrated
+        // flow rate (firmware/include/config.h FLOWRATE_PUMPn_X100).
+        let segments: [(pumpId: String, ml: Double, msPerMl: Double)] = Catalog.pumps.compactMap { p in
             guard let pct = drink.ratios[p.id], pct > 0 else { return nil }
-            return (p.id, Double(pct) / 100.0 * Double(cup.ml))
+            return (p.id, Double(pct) / 100.0 * Double(cup.ml), 1000.0 / p.flowRateMlPerSec)
         }
         let totalMl = max(1.0, Double(cup.ml))
 
@@ -311,7 +350,7 @@ final class BluetoothManager: NSObject {
 
         for (idx, seg) in segments.enumerated() {
             activePumpId = seg.pumpId
-            let segMs = max(1.0, seg.ml * msPerMl / max(0.1, speed))
+            let segMs = max(1.0, seg.ml * seg.msPerMl / max(0.1, speed))
             let segStart = Date()
 
             var segElapsed: Double = 0
@@ -529,11 +568,25 @@ private extension BluetoothManager {
     func apply(packet: MachinePacket) {
         // Cup class — '0'=empty, '1'..'3'=small/medium/large. Drives the
         // CupSizeBadge, the per-drink mL math, and the Dispense gating.
-        cupSize = CupSize(firmwareByte: packet.cupClass)
+        // In MAINTENANCE the firmware reuses this field for the Clean/Refill
+        // selection, so fold it into `maintenanceMode` there and leave the
+        // last real cup size untouched.
+        if packet.state == .maintenance {
+            maintenanceMode = (packet.cupClass == 0x31) ? .refill : .clean
+            // The firmware reuses the error field for the pot-selected pump
+            // index (0…5 = P1…P6, 6 = all). Clamp to the valid range; anything
+            // else leaves the selection unknown.
+            let sel = Int(packet.errorCode)
+            maintenanceSelectedPump = (0...6).contains(sel) ? sel : nil
+        } else {
+            cupSize = CupSize(firmwareByte: packet.cupClass)
+            maintenanceSelectedPump = nil
+        }
 
         // Bottles: Catalog.pumps is ordered P1…P6, which matches the firmware's
-        // usedMl[0…5] / OJ-PJ-CJ-LJ-GR-GS order. Capacity is fixed at the
-        // EEPROM total (750 mL); remaining = capacity - usedMl.
+        // usedMl[0…5] / OJ-PJ-CJ-LJ-GR-TW order. Capacity is per pump
+        // (Pump.capacityMl, mirroring firmware bottleCapacityMl[]);
+        // remaining = capacity - usedMl.
         for (idx, pump) in Catalog.pumps.enumerated() {
             guard let bIdx = bottles.firstIndex(where: { $0.id == pump.id }) else { continue }
             let used = Double(packet.usedMl[idx])
@@ -555,10 +608,7 @@ private extension BluetoothManager {
             lastError = machineError(for: packet.errorCode)
             // A live pour is now invalid — kill the local simulation clock so
             // the progress bar stops advancing behind the overlay.
-            dispenseTask?.cancel()
-            dispenseTask = nil
-            dispenseProgress = 0
-            activePumpId = nil
+            stopLocalDispense()
         }
 
         // Refill detection: diff usedMl against the previous packet. Any

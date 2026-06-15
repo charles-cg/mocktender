@@ -2,7 +2,9 @@
 #include <avr/eeprom.h>
 
 #define EEPROM_MAGIC 0xCE
-#define BOTTLE_CAPACITY_ML 750
+
+// Per-pump bottle capacities in mL (P1…P6).
+static const uint16_t bottleCapacityMl[6] = { 946, 960, 1000, 1000, 1000, 750 };
 
 uint8_t EEMEM magicByte = EEPROM_MAGIC;
 uint16_t EEMEM eeTotalMl[6];
@@ -17,7 +19,7 @@ void eepromInit() {
         for (int i = 0; i < 6; i++) {
             uint16_t total = eeprom_read_word(&eeTotalMl[i]);
             uint16_t used  = eeprom_read_word(&eeUsedMl[i]);
-            if (total != BOTTLE_CAPACITY_ML || used > total) {
+            if (total != bottleCapacityMl[i] || used > total) {
                 needReset = 1;
                 break;
             }
@@ -25,7 +27,7 @@ void eepromInit() {
     }
     if (needReset) {
         for (int i = 0; i < 6; i++) {
-            eeprom_update_word(&eeTotalMl[i], BOTTLE_CAPACITY_ML);
+            eeprom_update_word(&eeTotalMl[i], bottleCapacityMl[i]);
             eeprom_update_word(&eeUsedMl[i], 0);
         }
         eeprom_update_byte(&magicByte, EEPROM_MAGIC);

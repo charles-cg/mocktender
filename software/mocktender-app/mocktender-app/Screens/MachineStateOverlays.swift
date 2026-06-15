@@ -55,12 +55,37 @@ struct CalibrationOverlay: View {
 // MARK: - Maintenance
 
 struct MaintenanceOverlay: View {
+    /// The sub-mode the operator currently has selected on the front panel.
+    /// Driven by the firmware's maintenance packets (cup field).
+    let mode: BluetoothManager.MaintenanceMode
+    /// The pump dialled in on the front-panel pot, as reported in the
+    /// maintenance packet's error field. 0…5 = a single pump (P1…P6),
+    /// 6 = all pumps, `nil` = not yet known.
+    let selectedPump: Int?
+
+    /// Human-readable description of the pot selection for the operator.
+    private var selectionText: String {
+        guard let sel = selectedPump else { return "Reading selector…" }
+        if sel == 6 { return "All pumps" }
+        guard Catalog.pumps.indices.contains(sel) else { return "—" }
+        let p = Catalog.pumps[sel]
+        return "\(p.code) · \(p.name)"
+    }
+
+    /// Tint for the selection chip — the dialled pump's colour, or a neutral
+    /// blue for "all pumps" / unknown.
+    private var selectionColor: Color {
+        guard let sel = selectedPump, sel != 6,
+              Catalog.pumps.indices.contains(sel) else { return Color(hex: 0x2E7DF6) }
+        return Catalog.pumps[sel].color
+    }
+
     var body: some View {
         ZStack {
             Color.black.opacity(0.55)
                 .ignoresSafeArea()
             GlassPanel(radius: 28, padding: 24) {
-                VStack(spacing: 14) {
+                VStack(spacing: 16) {
                     Image(systemName: "wrench.and.screwdriver.fill")
                         .font(.system(size: 32, weight: .semibold))
                         .foregroundStyle(Color(hex: 0x0A2350))
@@ -68,16 +93,86 @@ struct MaintenanceOverlay: View {
                         .font(.system(size: 22, weight: .bold))
                         .kerning(-0.3)
                         .foregroundStyle(Color(hex: 0x0A2350))
-                    Text("The machine is in maintenance mode.\nUse the front-panel buttons to choose\nClean or Refill.")
+                    Text("Tap the maintenance button to switch, then\npress Start to run the highlighted action.")
                         .multilineTextAlignment(.center)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color(hex: 0x0A2350).opacity(0.65))
+
+                    HStack(spacing: 12) {
+                        ModePill(icon: "drop.fill", label: "Clean",
+                                 selected: mode == .clean)
+                        ModePill(icon: "arrow.clockwise", label: "Refill",
+                                 selected: mode == .refill)
+                    }
+                    .padding(.top, 2)
+
+                    // Which pump the front-panel pot currently selects for the
+                    // clean/refill action. Mirrors the firmware's globalPump.
+                    HStack(spacing: 8) {
+                        Image(systemName: selectedPump == 6
+                              ? "square.grid.2x2.fill" : "spigot.fill")
+                            .font(.system(size: 13, weight: .bold))
+                        Text(selectionText)
+                            .font(.system(size: 13, weight: .bold))
+                            .kerning(-0.2)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(selectionColor)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(selectionColor.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(selectionColor.opacity(0.35), lineWidth: 1)
+                    )
+                    .padding(.top, 4)
+                    .animation(.easeInOut(duration: 0.2), value: selectedPump)
                 }
                 .padding(.horizontal, 8)
             }
             .padding(.horizontal, 24)
         }
+        .animation(.easeInOut(duration: 0.2), value: mode)
         .transition(.opacity)
+    }
+
+    /// One selectable maintenance action. The highlighted pill mirrors the
+    /// machine's currently-armed selection.
+    private struct ModePill: View {
+        let icon: String
+        let label: String
+        let selected: Bool
+
+        var body: some View {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 13, weight: .bold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .foregroundStyle(selected ? Color.white : Color(hex: 0x0A2350).opacity(0.55))
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(selected
+                          ? AnyShapeStyle(LinearGradient(
+                                colors: [Color(hex: 0x2E7DF6), Color(hex: 0x0A2350)],
+                                startPoint: .top, endPoint: .bottom))
+                          : AnyShapeStyle(Color(hex: 0x0A2350).opacity(0.06)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(selected ? Color.white.opacity(0.5) : Color.clear,
+                            lineWidth: 1)
+            )
+            .shadow(color: selected ? Color(hex: 0x2E7DF6).opacity(0.35) : .clear,
+                    radius: 8, y: 4)
+        }
     }
 }
 
@@ -180,7 +275,8 @@ struct RefillBanner: View {
     }
     private var subtitle: String {
         if let short = data.pumpShort {
-            return "\(short) is back to 750 ml."
+            let cap = Catalog.pumps.first { $0.short == short }?.capacityMl ?? 750
+            return "\(short) is back to \(Int(cap)) ml."
         }
         return "All six bottles topped up."
     }

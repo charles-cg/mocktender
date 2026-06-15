@@ -29,7 +29,7 @@ struct MachinePacket: Equatable {
     var state: FirmwareState
     var cupClass: UInt8
     var errorCode: UInt8
-    /// usedMl per pump, indexed P1…P6 (i.e. OJ, PJ, CJ, LJ, GR, GS). Each
+    /// usedMl per pump, indexed P1…P6 (i.e. OJ, PJ, CJ, LJ, GR, TW). Each
     /// value is the 16-bit `usedMl[i]` straight from the firmware, transmitted
     /// little-endian (low byte first).
     var usedMl: [UInt16]    // count == 6

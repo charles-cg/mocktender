@@ -7,6 +7,14 @@ struct Pump: Identifiable, Hashable {
     let short: String       // "OJ"
     let color: Color
     let light: Color
+    /// Measured pump throughput in mL/s. Mirrors the per-pump
+    /// `FLOWRATE_PUMPn_X100` constants in firmware/include/config.h (which
+    /// store mL/s × 100). The dispense simulation derives its per-pump pour
+    /// duration from this so the on-screen progress matches the machine.
+    let flowRateMlPerSec: Double
+    /// Per-bottle capacity in mL. Mirrors the firmware's per-pump
+    /// `bottleCapacityMl[]` seed values in firmware/src/eeprom.c.
+    let capacityMl: Double
 }
 
 struct Drink: Identifiable, Hashable {
@@ -45,9 +53,9 @@ enum CupSize: String, CaseIterable, Identifiable {
     var ml: Int {
         switch self {
         case .empty:  return 0
-        case .small:  return 100
-        case .medium: return 250
-        case .large:  return 400
+        case .small:  return 120
+        case .medium: return 190
+        case .large:  return 240
         }
     }
     /// Internal cup-class marker used by the firmware (`classifyCup()` in
@@ -62,13 +70,16 @@ enum CupSize: String, CaseIterable, Identifiable {
         }
     }
     /// Lower bound in grams from `config.h`. Used by the (future) RX path
-    /// to classify a weight reading the same way the firmware does.
+    /// to classify a weight reading the same way the firmware does. The
+    /// firmware's `classifyCup()` now matches a symmetric ±CUP_TOLERANCE (30 g)
+    /// band around each measured empty-cup weight, so the lower bound is
+    /// `measured − tolerance` (SMALL 240.5, MED 312.5, BIG 393.8).
     var minWeightGrams: Int {
         switch self {
         case .empty:  return 0       // < CUP_PRESENT (20)
-        case .small:  return 20      // CUP_PRESENT
-        case .medium: return 100     // SMALL_CUP
-        case .large:  return 300     // MED_CUP
+        case .small:  return 210     // SMALL_CUP − CUP_TOLERANCE (240.5 − 30)
+        case .medium: return 282     // MED_CUP − CUP_TOLERANCE (312.5 − 30)
+        case .large:  return 363     // BIG_CUP − CUP_TOLERANCE (393.8 − 30)
         }
     }
 }
@@ -76,8 +87,9 @@ enum CupSize: String, CaseIterable, Identifiable {
 struct Bottle: Identifiable, Hashable {
     let id: String           // matches Pump.id
     var remaining: Double    // ml
-    /// Per-bottle capacity in mL. Default matches the firmware's EEPROM
-    /// initial value (`eeTotalMl[i] = 750` in firmware/src/eeprom.c).
+    /// Per-bottle capacity in mL. Set per pump from `Pump.capacityMl`, which
+    /// mirrors the firmware's per-pump `bottleCapacityMl[]` seed values in
+    /// firmware/src/eeprom.c (P1 946, P2 960, P3–P5 1000, P6 750).
     var capacity: Double = 750
 }
 
@@ -113,17 +125,29 @@ enum Screen: Hashable {
 enum Catalog {
     static let pumps: [Pump] = [
         .init(id: "P1", code: "P1", name: "Orange Juice",    short: "OJ",
-              color: Color(hex: 0xFF8C2A), light: Color(hex: 0xFFC68A)),
+              color: Color(hex: 0xFF8C2A), light: Color(hex: 0xFFC68A),
+              flowRateMlPerSec: 33.33,    // FLOWRATE_PUMP1_X100 = 3333
+              capacityMl: 946),
         .init(id: "P2", code: "P2", name: "Pineapple Juice", short: "PJ",
-              color: Color(hex: 0xE8C612), light: Color(hex: 0xF6E47A)),
+              color: Color(hex: 0xE8C612), light: Color(hex: 0xF6E47A),
+              flowRateMlPerSec: 27.25,    // FLOWRATE_PUMP2_X100 = 2725
+              capacityMl: 960),
         .init(id: "P3", code: "P3", name: "Cranberry Juice", short: "CJ",
-              color: Color(hex: 0xD6233F), light: Color(hex: 0xF08698)),
+              color: Color(hex: 0xD6233F), light: Color(hex: 0xF08698),
+              flowRateMlPerSec: 31.13,    // FLOWRATE_PUMP3_X100 = 3113
+              capacityMl: 1000),
         .init(id: "P4", code: "P4", name: "Lime Juice",      short: "LJ",
-              color: Color(hex: 0x4CB951), light: Color(hex: 0xA7E0AA)),
+              color: Color(hex: 0x4CB951), light: Color(hex: 0xA7E0AA),
+              flowRateMlPerSec: 24.47,    // FLOWRATE_PUMP4_X100 = 2447
+              capacityMl: 1000),
         .init(id: "P5", code: "P5", name: "Grenadine",       short: "GR",
-              color: Color(hex: 0xD14B9C), light: Color(hex: 0xED9CCB)),
-        .init(id: "P6", code: "P6", name: "Ginger Syrup",    short: "GS",
-              color: Color(hex: 0x9B6A3F), light: Color(hex: 0xC9A07A)),
+              color: Color(hex: 0xD14B9C), light: Color(hex: 0xED9CCB),
+              flowRateMlPerSec: 22.70,    // FLOWRATE_PUMP5_X100 = 2270
+              capacityMl: 1000),
+        .init(id: "P6", code: "P6", name: "Tamarind Water",  short: "TW",
+              color: Color(hex: 0xC1762B), light: Color(hex: 0xE0A86A),
+              flowRateMlPerSec: 28.67,    // FLOWRATE_PUMP6_X100 = 2867
+              capacityMl: 750),
     ]
 
     static func pump(_ id: String) -> Pump? { pumps.first { $0.id == id } }
@@ -140,29 +164,29 @@ enum Catalog {
         .init(id: 1, char: "2", name: "Tropical Breeze", tagline: "Pineapple · cranberry",
               ratios: ["P2": 50, "P3": 35, "P4": 15],
               grad: [Color(hex: 0xFFE16A), Color(hex: 0xFF8E58), Color(hex: 0xD6233F)]),
-        .init(id: 2, char: "3", name: "Mocktail Mule",   tagline: "Cranberry · ginger",
-              ratios: ["P3": 50, "P4": 15, "P6": 35],
-              grad: [Color(hex: 0xF08698), Color(hex: 0xD6233F), Color(hex: 0x9B6A3F)]),
+        .init(id: 2, char: "3", name: "Mocktail Mule",   tagline: "Cranberry · tamarind",
+              ratios: ["P3": 42, "P4": 13, "P6": 45],
+              grad: [Color(hex: 0xF08698), Color(hex: 0xD6233F), Color(hex: 0xC1762B)]),
         .init(id: 3, char: "4", name: "Tropical Sunset", tagline: "Orange · pineapple",
               ratios: ["P1": 40, "P2": 40, "P5": 20],
               grad: [Color(hex: 0xFFE16A), Color(hex: 0xFF8C2A), Color(hex: 0xD14B9C)]),
-        .init(id: 4, char: "5", name: "Ginger Tropic",   tagline: "Pineapple · ginger",
-              ratios: ["P2": 55, "P4": 15, "P6": 30],
-              grad: [Color(hex: 0xFFE780), Color(hex: 0xE8C612), Color(hex: 0x9B6A3F)]),
+        .init(id: 4, char: "5", name: "Tamarind Tropic", tagline: "Pineapple · tamarind",
+              ratios: ["P2": 45, "P4": 15, "P6": 40],
+              grad: [Color(hex: 0xFFE780), Color(hex: 0xE8C612), Color(hex: 0xC1762B)]),
         .init(id: 5, char: "6", name: "Paradise Punch",  tagline: "Four-juice classic",
               ratios: ["P1": 30, "P2": 30, "P3": 25, "P4": 15],
               grad: [Color(hex: 0xFFC15C), Color(hex: 0xF08C5C), Color(hex: 0xD6233F)]),
         .init(id: 6, char: "7", name: "Citrus Berry",    tagline: "Orange · cranberry",
               ratios: ["P1": 40, "P3": 40, "P4": 20],
               grad: [Color(hex: 0xFFA858), Color(hex: 0xE04A6A), Color(hex: 0xA8205E)]),
-        .init(id: 7, char: "8", name: "Ginger Berry",    tagline: "Cranberry · ginger",
-              ratios: ["P3": 55, "P5": 15, "P6": 30],
-              grad: [Color(hex: 0xF08698), Color(hex: 0xC53050), Color(hex: 0x7A4A2A)]),
+        .init(id: 7, char: "8", name: "Tamarind Berry",  tagline: "Cranberry · tamarind",
+              ratios: ["P3": 48, "P5": 12, "P6": 40],
+              grad: [Color(hex: 0xF08698), Color(hex: 0xC53050), Color(hex: 0x8A4E1E)]),
         .init(id: 8, char: "9", name: "Pink Lemonade",   tagline: "Bright, tart, pink",
               ratios: ["P1": 30, "P3": 30, "P4": 20, "P5": 20],
               grad: [Color(hex: 0xFFD0DE), Color(hex: 0xFF8AAE), Color(hex: 0xE04A8C)]),
         .init(id: 9, char: "A", name: "Full House",      tagline: "All six, in balance",
-              ratios: ["P1": 20, "P2": 20, "P3": 20, "P4": 10, "P5": 20, "P6": 10],
+              ratios: ["P1": 20, "P2": 20, "P3": 20, "P4": 10, "P5": 15, "P6": 15],
               grad: [Color(hex: 0xFFD86A), Color(hex: 0xFF7A50), Color(hex: 0xC53C7C)]),
     ]
 }

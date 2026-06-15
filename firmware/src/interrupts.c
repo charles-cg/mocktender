@@ -10,6 +10,7 @@ volatile uint8_t pumpBusy = 0;
 volatile uint8_t maintPressed = 0;
 volatile uint8_t rstPressed = 0;
 volatile uint8_t startPressed = 0;
+volatile uint8_t cancelPressed = 0;
 volatile uint8_t delayCheck = 0;
 volatile uint8_t delay30sDone = 0;
 
@@ -18,6 +19,9 @@ ISR(USART_RXC_vect) {
     if ((rx >= '1' && rx <= '9') || rx == 'A') {
         packet = rx;
         dataReady = 1;
+    } else if (rx == 'C') {
+        // App "Cancel" — polled in the running-pump loops to abort a pour
+        cancelPressed = 1;
     }
 }
 

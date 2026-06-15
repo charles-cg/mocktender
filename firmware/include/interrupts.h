@@ -12,6 +12,7 @@ extern volatile uint8_t pumpBusy;
 extern volatile uint8_t maintPressed;
 extern volatile uint8_t rstPressed;
 extern volatile uint8_t startPressed;
+extern volatile uint8_t cancelPressed;
 extern volatile uint8_t delayCheck;
 extern volatile uint8_t delay30sDone;
 

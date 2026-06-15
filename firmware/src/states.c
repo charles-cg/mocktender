@@ -112,6 +112,7 @@ void handleCupPlaced(FSM* nFsm) {
 
 void handleDispense(FSM* nFsm) {
     GICR &= ~(1 << INT0);
+    cancelPressed = 0;   // ignore any cancel latched before the pour started
 
     for (uint8_t p = 0; p < 6; p++) {
         if (getRecipeRatio(nFsm->recipeId, p) == 0) continue;
@@ -129,9 +130,12 @@ void handleDispense(FSM* nFsm) {
             pumpBusy = 1;
             TCNT1 = 0;
             dynamicDelay(nFsm, globalPump);
+            uint8_t absentCount = 0;   // consecutive sub-threshold reads
             while (pumpBusy) {
-                if (rstPressed) {
-                    rstAction(nFsm);
+                // Physical reset or app "Cancel" aborts the pour back to IDLE
+                if (rstPressed || cancelPressed) {
+                    cancelPressed = 0;
+                    rstAction(nFsm);   // clears rstPressed + cup/recipe/error
                     TCCR1B = 0x00;
                     TCNT1 = 0;
                     PORTC &= ~(1 << globalPump);
@@ -140,8 +144,11 @@ void handleDispense(FSM* nFsm) {
                     transition(nFsm, IDLE);
                     return;
                 }
-                float weight = HX711_get_mean_units(10);
+                float weight = HX711_get_mean_units(DISPENSE_POLL_SAMPLES);
+                // Only fault once the cup stays absent for several reads (motor
+                // noise can briefly read low)
                 if (weight < CUP_PRESENT) {
+                    if (++absentCount < CUP_REMOVED_CONSEC) continue;
                     TCCR1B = 0x00;
                     TCNT1 = 0;
                     PORTC &= ~(1 << globalPump);
@@ -151,6 +158,7 @@ void handleDispense(FSM* nFsm) {
                     transition(nFsm, ERROR);
                     return;
                 }
+                absentCount = 0;
             }
             usedMl[globalPump] += calculateMl(nFsm, globalPump);
             eeprom_update_word(&eeUsedMl[globalPump], usedMl[globalPump]);
@@ -198,6 +206,18 @@ void handleMaintenance(FSM* nFsm) {
         maintPressed = 0;
     }
 
+    // Mirror selection + pot-selected pump to the app, only on change to avoid
+    // flooding the BLE bridge. Selection rides in the cup field ('0'=clean,
+    // '1'=refill), pump index (0..6) in the error field.
+    potClassify();
+    static uint8_t lastSel = 0xFF;
+    static uint8_t lastPump = 0xFF;
+    if (maintPressed != lastSel || globalPump != lastPump) {
+        lastSel = maintPressed;
+        lastPump = globalPump;
+        sendPacket('0' + maintPressed, nFsm->state, globalPump);
+    }
+
     if (startPressed) {
         if (maintPressed == 0) {
             // ADC read with selection save by modifying globalPump
@@ -218,6 +238,7 @@ void handleMaintenance(FSM* nFsm) {
 }
 
 void handleCleaning(FSM* nFsm) {
+    cancelPressed = 0;   // ignore any cancel latched before cleaning started
     if (globalPump == 6) {
         PORTC |= (0b00111111);
         dynamicTimer(65535);
@@ -228,8 +249,12 @@ void handleCleaning(FSM* nFsm) {
         pumpBusy = 1;
     }
 
+    uint8_t absentCount = 0;   // consecutive sub-threshold reads
     while (pumpBusy) {
-        if (rstPressed) {
+        // Physical reset or app "Cancel" stops cleaning; polled first so it
+        // wins over the cup check during high-current inrush
+        if (rstPressed || cancelPressed) {
+            cancelPressed = 0;
             TCCR1B = 0x00;
             TCNT1 = 0;
             PORTC &= ~(0b00111111);
@@ -241,8 +266,11 @@ void handleCleaning(FSM* nFsm) {
         }
         sendPacket(nFsm->cupClass, nFsm->state, nFsm->errorCode);
 
-        float weight = HX711_get_mean_units(10);
+        // Ride out transient absent reads (motor inrush can brown out the
+        // load cell) before faulting to "cup removed"
+        float weight = HX711_get_mean_units(DISPENSE_POLL_SAMPLES);
         if (weight < CUP_PRESENT) {
+            if (++absentCount < CUP_REMOVED_CONSEC) continue;
             TCCR1B = 0x00;
             TCNT1 = 0;
             PORTC &= ~(0b00111111);
@@ -253,6 +281,7 @@ void handleCleaning(FSM* nFsm) {
             transition(nFsm, ERROR);
             return;
         }
+        absentCount = 0;
     }
 
     globalPump = 0;
@@ -306,20 +335,30 @@ void rstAction(FSM* nFsm) {
 }
 
 char classifyCup(float weight) {
-    if (weight >= CUP_PRESENT && weight < SMALL_CUP) {
+    if (weight >= SMALL_CUP - CUP_TOLERANCE && weight <= SMALL_CUP + CUP_TOLERANCE) {
         return '1';
-    } else if (weight >= SMALL_CUP && weight < MED_CUP) {
+    } else if (weight >= MED_CUP - CUP_TOLERANCE && weight <= MED_CUP + CUP_TOLERANCE) {
         return '2';
-    } else if (weight >= MED_CUP) {
+    } else if (weight >= BIG_CUP - CUP_TOLERANCE && weight <= BIG_CUP + CUP_TOLERANCE) {
         return '3';
     } else {
         return '0';
     }
 }
 
+// Per-pump flow rates, mL/s * 100. Index matches globalPump (0-5).
+static const uint16_t flowRateX100[6] = {
+    FLOWRATE_PUMP1_X100,
+    FLOWRATE_PUMP2_X100,
+    FLOWRATE_PUMP3_X100,
+    FLOWRATE_PUMP4_X100,
+    FLOWRATE_PUMP5_X100,
+    FLOWRATE_PUMP6_X100,
+};
+
 void dynamicDelay (FSM* nFsm, uint8_t pump) {
     uint16_t volume = calculateMl(nFsm, pump);
-    uint16_t time = calculateTime(volume);
+    uint16_t time = calculateTime(volume, pump);
     uint16_t ocr = calculateOCR1(time);
     dynamicTimer(ocr);
 }
@@ -330,10 +369,10 @@ uint16_t calculateOCR1(uint16_t time_ms) {
     return (uint32_t)time_ms * 1000UL / TIMER_TICK_US - 1;
 }
 
-// Returns dispense duration in milliseconds.
-// 1000 ms/s / 26.67 mL/s = 75/2 ms per mL (exact).
-uint16_t calculateTime(uint16_t volume) {
-    return volume * 75 / 2;
+// Returns dispense duration in milliseconds for a given pump.
+// time_ms = volume_mL / (mL/s) * 1000 = volume * 100000 / flowRateX100.
+uint16_t calculateTime(uint16_t volume, uint8_t pump) {
+    return (uint32_t)volume * 100000UL / flowRateX100[pump];
 }
 
 uint16_t calculateMl(FSM* nFsm, uint8_t pump) {
@@ -346,11 +385,11 @@ uint16_t calculateMl(FSM* nFsm, uint8_t pump) {
 uint16_t getCupSize(FSM* nFsm) {
     switch (nFsm->cupClass) {
         case '1':
-            return 100;
+            return 120;   // small cup volume (mL)
         case '2':
-            return 250;
+            return 190;   // medium cup volume (mL)
         case '3':
-            return 400;
+            return 240;   // big cup volume (mL)
         default:
             nFsm->errorCode = 0x02;
             transition(nFsm, ERROR);

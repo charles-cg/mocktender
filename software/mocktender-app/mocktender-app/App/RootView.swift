@@ -36,7 +36,8 @@ struct RootView: View {
                         .zIndex(70)
                 }
                 if ble.machineState == .maintenance {
-                    MaintenanceOverlay()
+                    MaintenanceOverlay(mode: ble.maintenanceMode,
+                                       selectedPump: ble.maintenanceSelectedPump)
                         .zIndex(70)
                 }
                 if ble.machineState == .cleaning {
@@ -75,9 +76,19 @@ struct RootView: View {
             }
         }
         .ignoresSafeArea()
+        // The pour progress bar is driven by a local simulation, but the
+        // machine is the source of truth for *transitions*. If the firmware
+        // leaves DISPENSE on its own — operator hit the physical reset button,
+        // or an app Cancel latched cancelPressed — follow it off the dispense
+        // screen instead of letting the sim run to a phantom 100%.
+        .onChange(of: ble.machineState) { _, newState in
+            handleMachineState(newState)
+        }
         .foregroundStyle(dispenseActive ? Color.white : Color(hex: 0x0A2350))
         .animation(.easeInOut(duration: 0.25), value: app.screen)
         .animation(.easeInOut(duration: 0.25), value: ble.machineState)
+        .animation(.easeInOut(duration: 0.2), value: ble.maintenanceMode)
+        .animation(.easeInOut(duration: 0.2), value: ble.maintenanceSelectedPump)
         .animation(.easeInOut(duration: 0.25), value: ble.refillBanner)
         .animation(.easeInOut(duration: 0.25), value: ble.lowBottleBanner)
     }
@@ -110,6 +121,30 @@ struct RootView: View {
         ble.bleLostDuringDispense = false
         ble.lastError = nil
         app.screen = .detail
+    }
+
+    /// React to firmware-driven FSM transitions while the app is showing the
+    /// dispense screen. The local simulation only knows about cancels issued
+    /// *through the app*; a press of the machine's physical reset button (or
+    /// any other firmware-side abort) shows up only as a state change here.
+    private func handleMachineState(_ state: FirmwareState) {
+        guard app.screen == .dispense else { return }
+        switch state {
+        case .idle, .cupPlaced:
+            // Machine aborted the pour (reset button / cancel). Stop the sim
+            // clock and drop back to the drink detail screen.
+            ble.stopLocalDispense()
+            ble.bleLostDuringDispense = false
+            ble.lastError = nil
+            app.screen = .detail
+        case .deliver:
+            // Pour finished on the machine — advance even if the local sim
+            // clock hasn't reached 100% yet.
+            ble.stopLocalDispense()
+            app.screen = .deliver
+        default:
+            break
+        }
     }
 
     private func cupRemoved() {

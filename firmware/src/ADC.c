@@ -15,7 +15,9 @@ uint16_t adcRead(uint8_t channel) {
     ADCSRA |= (1 << ADSC);
 
     // Wait for conversion to complete
-    while (ADCSRA & (1 << ADSC));
+    while (!(ADCSRA & (1 << ADIF)));
+
+    ADCSRA |= (1 << ADIF);
 
     return ADC;  // 10-bit result, 0–1023
 }
